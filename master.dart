@@ -310,6 +310,16 @@ class MasterS extends StatelessWidget {
                       ),
 
                       SizedBox(height: 60 * scale),
+                      buildMenuButton(
+                        icon: Icons.notifications_active,
+                        label: 'Отправить пуш работникам',
+                        onPressed: () => Navigator.pushNamed(context, '/SendPushScreen'),
+                        textColor: Colors.white,
+                        bgColor: Colors.blue, // Синяя кнопка
+                        alignLeft: false,
+                        context: context,
+                      ),
+                      SizedBox(height: 80 * scale),
 
                       Container(
                         margin: EdgeInsets.only(bottom: 10 * scale),

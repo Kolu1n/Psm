@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:psm/custom_snackbar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 TextEditingController emailController = TextEditingController();
 TextEditingController passwordController = TextEditingController();
@@ -357,6 +358,40 @@ class _WhodState extends State<Whod> {
   }
 }
 
+// 🔥 ВАЖНЫЙ МЕТОД: Сохраняет FCM токен при входе
+Future<void> _saveFCMTokenOnLogin(String userId) async {
+  try {
+    print('🔄 Сохраняю FCM токен при входе для пользователя $userId');
+
+    String? token = await FirebaseMessaging.instance.getToken();
+
+    if (token == null || token.isEmpty) {
+      print('⚠️ FCM токен не получен, пробую снова...');
+      await Future.delayed(Duration(seconds: 1));
+      token = await FirebaseMessaging.instance.getToken();
+    }
+
+    if (token != null && token.isNotEmpty) {
+      print('📱 FCM токен получен: ${token.substring(0, 30)}...');
+
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userId)
+          .set({
+        'fcmToken': token,
+        'fcmTokenUpdatedAt': FieldValue.serverTimestamp(),
+        'lastLogin': DateTime.now().toIso8601String(),
+      }, SetOptions(merge: true));
+
+      print('✅ FCM токен сохранен при входе для пользователя $userId');
+    } else {
+      print('❌ Не удалось получить FCM токен при входе');
+    }
+  } catch (e) {
+    print('❌ Ошибка сохранения токена при входе: $e');
+  }
+}
+
 Future<void> login(BuildContext context) async {
   String emailText = emailController.text.trim();
   String passwordText = passwordController.text.trim();
@@ -386,6 +421,12 @@ Future<void> login(BuildContext context) async {
     // Сохраняем состояние авторизации
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('isLoggedIn', true);
+
+    // 🔥 ВАЖНО: Сохраняем FCM токен после успешного входа
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      await _saveFCMTokenOnLogin(user.uid);
+    }
 
     await _checkUserSpecialization(context);
 
@@ -428,6 +469,9 @@ Future<void> _checkUserSpecialization(BuildContext context) async {
       if (userDoc.exists) {
         final userData = userDoc.data();
         final specialization = userData?['specialization'] ?? 0;
+
+        // 🔥 Еще раз проверяем и сохраняем FCM токен
+        await _saveFCMTokenOnLogin(user.uid);
 
         // Сохраняем специализацию пользователя
         final prefs = await SharedPreferences.getInstance();

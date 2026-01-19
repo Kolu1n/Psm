@@ -1,4 +1,3 @@
-// TaskDetailScreen.dart
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -26,47 +25,40 @@ class TaskDetailScreen extends StatefulWidget {
 }
 
 class _TaskDetailScreenState extends State<TaskDetailScreen> {
-  int? userSpecialization;
+  int? userSpec;
   bool isLoading = false;
   String creatorName = 'Загрузка...';
   String executorName = 'Загрузка...';
   String reviewerName = 'Загрузка...';
 
   double getScaleFactor(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    final height = MediaQuery.of(context).size.height;
-    final diagonal = MediaQuery.of(context).size.shortestSide;
-
-    if (diagonal < 300) return 0.65;
-    if (diagonal < 350) return 0.75;
-    if (diagonal < 400) return 0.85;
-    if (diagonal < 450) return 0.9;
-    if (diagonal < 500) return 0.95;
-    if (diagonal < 600) return 1.0;
-    if (diagonal < 700) return 1.1;
-    if (diagonal < 800) return 1.2;
-    if (diagonal < 1000) return 1.3;
+    final d = MediaQuery.of(context).size.shortestSide;
+    if (d < 300) return 0.65;
+    if (d < 350) return 0.75;
+    if (d < 400) return 0.85;
+    if (d < 450) return 0.9;
+    if (d < 500) return 0.95;
+    if (d < 600) return 1.0;
+    if (d < 700) return 1.1;
+    if (d < 800) return 1.2;
+    if (d < 1000) return 1.3;
     return 1.4;
   }
 
   @override
   void initState() {
     super.initState();
-    _loadUserSpecialization();
+    _loadUserSpec();
     _loadUserNames();
   }
 
-  Future<void> _loadUserSpecialization() async {
+  Future<void> _loadUserSpec() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-
-      if (userDoc.exists) {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      if (doc.exists) {
         setState(() {
-          userSpecialization = userDoc.data()?['specialization'] ?? 0;
+          userSpec = doc.data()?['specialization'] ?? 0;
         });
       }
     }
@@ -75,60 +67,39 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
   Future<void> _loadUserNames() async {
     if (widget.task['createdBy'] != null) {
       try {
-        final userDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(widget.task['createdBy'])
-            .get();
-
-        if (userDoc.exists) {
+        final doc = await FirebaseFirestore.instance.collection('users').doc(widget.task['createdBy']).get();
+        if (doc.exists) {
           setState(() {
-            creatorName = userDoc.data()?['displayName'] ?? 'Неизвестно';
+            creatorName = doc.data()?['displayName'] ?? 'Неизвестно';
           });
         }
-      } catch (e) {
-        print('Ошибка загрузки имени создателя: $e');
-      }
+      } catch (_) {}
     }
-
     if (widget.task['completedBy'] != null) {
       try {
-        final userDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(widget.task['completedBy'])
-            .get();
-
-        if (userDoc.exists) {
+        final doc = await FirebaseFirestore.instance.collection('users').doc(widget.task['completedBy']).get();
+        if (doc.exists) {
           setState(() {
-            executorName = userDoc.data()?['displayName'] ?? 'Неизвестно';
+            executorName = doc.data()?['displayName'] ?? 'Неизвестно';
           });
         }
-      } catch (e) {
-        print('Ошибка загрузки имени исполнителя: $e');
-      }
+      } catch (_) {}
     }
-
     if (widget.task['reviewedBy'] != null) {
       try {
-        final userDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(widget.task['reviewedBy'])
-            .get();
-
-        if (userDoc.exists) {
+        final doc = await FirebaseFirestore.instance.collection('users').doc(widget.task['reviewedBy']).get();
+        if (doc.exists) {
           setState(() {
-            reviewerName = userDoc.data()?['displayName'] ?? 'Неизвестно';
+            reviewerName = doc.data()?['displayName'] ?? 'Неизвестно';
           });
         }
-      } catch (e) {
-        print('Ошибка загрузки имени проверяющего: $e');
-      }
+      } catch (_) {}
     }
   }
 
-  Color _getStatusColor(String status) {
+  Color _statusColor(String status) {
     switch (status) {
       case 'completed':
-        return Colors.green;
       case 'approved':
         return Colors.green;
       case 'rejected':
@@ -140,7 +111,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     }
   }
 
-  IconData _getStatusIcon(String status) {
+  IconData _statusIcon(String status) {
     switch (status) {
       case 'completed':
         return Icons.check_circle;
@@ -155,7 +126,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     }
   }
 
-  String _getStatusText(String status) {
+  String _statusText(String status) {
     switch (status) {
       case 'active':
         return 'Активно';
@@ -172,61 +143,39 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
 
   Future<void> _reviewTask(bool approved) async {
     if (isLoading) return;
-
-    setState(() {
-      isLoading = true;
-    });
-
+    setState(() => isLoading = true);
     try {
       final user = FirebaseAuth.instance.currentUser;
-
-      final orderDoc = await FirebaseFirestore.instance
-          .collection(widget.collectionName)
-          .doc(widget.orderNumber)
-          .get();
-
-      if (!orderDoc.exists) {
-        throw Exception('Заказ не найден');
-      }
-
+      final orderDoc = await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).get();
+      if (!orderDoc.exists) throw Exception('Заказ не найден');
       final orderData = orderDoc.data()!;
       final tasks = List.from(orderData['tasks']);
+      if (widget.taskIndex >= tasks.length) throw Exception('Задание не найдено');
 
-      if (widget.taskIndex >= tasks.length) {
-        throw Exception('Задание не найдено в списке');
+      final bool isIPK = tasks[widget.taskIndex]['isIPK'] == true;
+      if (!approved && isIPK) {
+        CustomSnackBar.showWarning(context: context, message: 'ИПК-задания нельзя отклонять');
+        setState(() => isLoading = false);
+        return;
       }
 
       if (approved) {
         tasks.removeAt(widget.taskIndex);
-
         for (int i = 0; i < tasks.length; i++) {
           tasks[i]['taskNumber'] = i + 1;
         }
-
-        await FirebaseFirestore.instance
-            .collection(widget.collectionName)
-            .doc(widget.orderNumber)
-            .update({
+        await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).update({
           'tasks': tasks,
           'updatedAt': DateTime.now().toIso8601String(),
         });
-
         await _moveTaskToCompleted();
-
         if (tasks.isEmpty) {
-          await FirebaseFirestore.instance
-              .collection(widget.collectionName)
-              .doc(widget.orderNumber)
-              .delete();
+          await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).delete();
         }
-
         CustomSnackBar.showSuccess(
           context: context,
-          message: tasks.isEmpty
-              ? 'Задание подтверждено и заказ завершен'
-              : 'Задание подтверждено и перенесено в завершенные',
+          message: tasks.isEmpty ? 'Задание подтверждено и заказ завершен' : 'Задание подтверждено и перенесено в завершенные',
         );
-
       } else {
         tasks[widget.taskIndex] = {
           ...tasks[widget.taskIndex],
@@ -234,40 +183,23 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
           'reviewedBy': user?.uid,
           'reviewedAt': DateTime.now().toIso8601String(),
         };
-
-        await FirebaseFirestore.instance
-            .collection(widget.collectionName)
-            .doc(widget.orderNumber)
-            .update({
+        await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).update({
           'tasks': tasks,
           'updatedAt': DateTime.now().toIso8601String(),
         });
-
-        CustomSnackBar.showWarning(
-          context: context,
-          message: 'Задание отправлено на доработку',
-        );
+        CustomSnackBar.showWarning(context: context, message: 'Задание отправлено на доработку');
       }
-
       Navigator.of(context).pop();
-
     } catch (e) {
-      print('Ошибка при обновлении задания: $e');
-      CustomSnackBar.showError(
-        context: context,
-        message: 'Ошибка: $e',
-      );
+      CustomSnackBar.showError(context: context, message: 'Ошибка: $e');
     } finally {
-      setState(() {
-        isLoading = false;
-      });
+      setState(() => isLoading = false);
     }
   }
 
   Future<void> _moveTaskToCompleted() async {
     try {
       final user = FirebaseAuth.instance.currentUser;
-
       final completedTaskData = {
         'originalOrderNumber': widget.orderNumber,
         'originalCollection': widget.collectionName,
@@ -277,13 +209,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
         'approvedAt': DateTime.now().toIso8601String(),
         'approvedByName': await _getCurrentUserName(),
       };
-
-      await FirebaseFirestore.instance
-          .collection('completed_tasks')
-          .add(completedTaskData);
-
-      print('Задание перенесено в завершенные');
-
+      await FirebaseFirestore.instance.collection('completed_tasks').add(completedTaskData);
     } catch (e) {
       print('Ошибка при переносе задания в завершенные: $e');
     }
@@ -292,23 +218,91 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
   Future<String> _getCurrentUserName() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-
-      if (userDoc.exists) {
-        return userDoc.data()?['displayName'] ?? 'ИТМ';
+      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      if (doc.exists) {
+        return doc.data()?['displayName'] ?? 'ИТМ';
       }
     }
     return 'ИТМ';
   }
 
+  Future<void> _confirmDeleteTask() async {
+    final scale = getScaleFactor(context);
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        title: Text('Удаление задания', style: TextStyle(fontFamily: 'GolosB', fontSize: 19)),
+        content: Text('Вы уверены, что хотите удалить задание №${widget.taskNumber}?',
+            style: TextStyle(fontFamily: 'GolosR')),
+        actions: [
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  child: Text('Отмена', style: TextStyle(color: Colors.grey, fontFamily: 'GolosR', fontSize: 14)),
+                  onPressed: () => Navigator.pop(context, false),
+                  style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.grey)),
+                ),
+              ),
+              Expanded(
+                child: ElevatedButton(
+                  child: Text('Да', style: TextStyle(color: Colors.white, fontFamily: 'GolosB', fontSize: 14)),
+                  onPressed: () => Navigator.pop(context, true),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (yes == true) await _deleteTask();
+  }
+
+  Future<void> _deleteTask() async {
+    try {
+      final orderDoc = await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).get();
+      if (!orderDoc.exists) throw Exception('Заказ не найден');
+      final orderData = orderDoc.data()!;
+      final tasks = List.from(orderData['tasks']);
+      if (widget.taskIndex >= tasks.length) throw Exception('Задание не найдено');
+
+      final bool isIPK = tasks[widget.taskIndex]['isIPK'] == true;
+      if (isIPK) {
+        CustomSnackBar.showWarning(context: context, message: 'ИПК-задания нельзя удалять');
+        return;
+      }
+
+      tasks.removeAt(widget.taskIndex);
+      for (int i = 0; i < tasks.length; i++) {
+        tasks[i]['taskNumber'] = i + 1;
+      }
+      await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).update({
+        'tasks': tasks,
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+      CustomSnackBar.showSuccess(context: context, message: 'Задание №${widget.taskNumber} удалено');
+      if (tasks.isEmpty) {
+        await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).delete();
+        CustomSnackBar.showInfo(context: context, message: 'Все задания удалены. Заказ закрыт.');
+      }
+      Navigator.of(context).pop();
+    } catch (e) {
+      CustomSnackBar.showError(context: context, message: 'Ошибка удаления задания: $e');
+    }
+  }
+
   Widget _buildReviewButtons(BuildContext context) {
     final scale = getScaleFactor(context);
+    final status = widget.task['status'] ?? 'active';
 
-    if (userSpecialization != 4) return SizedBox();
-    if (widget.task['status'] != 'completed') return SizedBox();
+    // ✅ ИТМ не может проверять задания, которые он сам выполнил
+    final String? completedBy = widget.task['completedBy'];
+    final String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (userSpec != 4 && userSpec != 5) return const SizedBox();
+    if (status != 'completed') return const SizedBox();
+    if (userSpec == 4 && completedBy == currentUserId) return const SizedBox();
 
     return Container(
       margin: EdgeInsets.only(top: 20 * scale, bottom: 10 * scale),
@@ -320,116 +314,106 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
       ),
       child: Column(
         children: [
-          Text(
-            'Проверка выполнения:',
-            style: TextStyle(
-              fontSize: 16 * scale,
-              fontFamily: 'GolosB',
-              color: Colors.black87,
-            ),
-          ),
+          Text('Проверка выполнения:', style: TextStyle(fontSize: 16 * scale, fontFamily: 'GolosB', color: Colors.black87)),
           SizedBox(height: 15 * scale),
-          Column(
+          Row(
             children: [
-              Container(
-                width: double.infinity,
-                height: 45 * scale,
-                margin: EdgeInsets.only(bottom: 10 * scale),
-                child: ElevatedButton(
-                  onPressed: isLoading ? null : () => _reviewTask(true),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10 * scale),
+              Expanded(
+                child: Container(
+                  height: 45 * scale,
+                  margin: EdgeInsets.only(right: 8 * scale),
+                  child: ElevatedButton(
+                    onPressed: isLoading ? null : () => _reviewTask(true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
                     ),
-                  ),
-                  child: isLoading
-                      ? CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2
-                  )
-                      : Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.check,
-                          color: Colors.white,
-                          size: 20 * scale
-                      ),
-                      SizedBox(width: 8 * scale),
-                      Flexible(
-                        child: Text(
-                          'Подтвердить выполнение',
-                          style: TextStyle(
-                            fontSize: 14 * scale,
-                            fontFamily: 'GolosB',
-                            color: Colors.white,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                    child: isLoading
+                        ? CircularProgressIndicator(color: Colors.white, strokeWidth: 2)
+                        : Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.check, color: Colors.white, size: 20 * scale),
+                        SizedBox(width: 8 * scale),
+                        Flexible(
+                          child: Text('Подтвердить выполнение',
+                              style: TextStyle(fontSize: 14 * scale, fontFamily: 'GolosB', color: Colors.white),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
-              Container(
-                width: double.infinity,
-                height: 45 * scale,
-                child: OutlinedButton(
-                  onPressed: isLoading ? null : () => _reviewTask(false),
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: Colors.red, width: 2),
-                    backgroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10 * scale),
+              Expanded(
+                child: Container(
+                  height: 45 * scale,
+                  child: OutlinedButton(
+                    onPressed: isLoading ? null : () => _reviewTask(false),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: Colors.red, width: 2),
+                      backgroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
                     ),
-                  ),
-                  child: isLoading
-                      ? CircularProgressIndicator(strokeWidth: 2)
-                      : Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.close,
-                          color: Colors.red,
-                          size: 20 * scale
-                      ),
-                      SizedBox(width: 8 * scale),
-                      Flexible(
-                        child: Text(
-                          'Отправить на доработку',
-                          style: TextStyle(
-                            fontSize: 14 * scale,
-                            fontFamily: 'GolosB',
-                            color: Colors.red,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                    child: isLoading
+                        ? CircularProgressIndicator(strokeWidth: 2)
+                        : Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.close, color: Colors.red, size: 20 * scale),
+                        SizedBox(width: 8 * scale),
+                        Flexible(
+                          child: Text('Отправить на доработку',
+                              style: TextStyle(fontSize: 14 * scale, fontFamily: 'GolosB', color: Colors.red),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
             ],
           ),
           SizedBox(height: 10 * scale),
-          Text(
-            'При подтверждении задание будет перенесено в завершенные',
-            style: TextStyle(
-              fontFamily: 'GolosR',
-              color: Colors.grey[600],
-              fontSize: 12 * scale,
-            ),
-            textAlign: TextAlign.center,
-          ),
+          Text('При подтверждении задание будет перенесено в завершенные',
+              style: TextStyle(fontFamily: 'GolosR', color: Colors.grey[600], fontSize: 12 * scale),
+              textAlign: TextAlign.center),
         ],
       ),
     );
   }
 
-  Widget _buildUserInfoCard(String title, String name, String? date, IconData icon, Color color, BuildContext context) {
+  Widget _buildDeleteTaskSection(BuildContext context) {
     final scale = getScaleFactor(context);
+    if (userSpec != 4 && userSpec != 5) return SizedBox();
 
+    return GestureDetector(
+      onTap: _confirmDeleteTask,
+      child: Container(
+        margin: EdgeInsets.only(top: 20 * scale, bottom: 10 * scale),
+        padding: EdgeInsets.all(16 * scale),
+        decoration: BoxDecoration(
+          color: Colors.red.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(15 * scale),
+          border: Border.all(color: Colors.red, width: 2),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.delete_outline, color: Colors.red, size: 20 * scale),
+            SizedBox(width: 10 * scale),
+            Text('Удалить задание',
+                style: TextStyle(fontSize: 16 * scale, fontFamily: 'GolosB', color: Colors.red)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUserInfoCard(String title, String name, String? date, IconData icon, Color color) {
+    final scale = getScaleFactor(context);
     return Container(
       margin: EdgeInsets.only(bottom: 12 * scale),
       padding: EdgeInsets.all(16 * scale),
@@ -437,61 +421,30 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
         color: color.withOpacity(0.05),
         borderRadius: BorderRadius.circular(12 * scale),
         border: Border.all(color: color.withOpacity(0.3)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 8 * scale,
-            offset: Offset(0, 2 * scale),
-          ),
-        ],
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8 * scale, offset: Offset(0, 2 * scale))],
       ),
       child: Row(
         children: [
           Container(
             width: 40 * scale,
             height: 40 * scale,
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(10 * scale),
-            ),
-            child: Icon(
-              icon,
-              color: Colors.white,
-              size: 20 * scale,
-            ),
+            decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(10 * scale)),
+            child: Icon(icon, color: Colors.white, size: 20 * scale),
           ),
           SizedBox(width: 12 * scale),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontFamily: 'GolosB',
-                    fontSize: 12 * scale,
-                    color: Colors.grey[600],
-                  ),
-                ),
+                Text(title,
+                    style: TextStyle(fontFamily: 'GolosB', fontSize: 12 * scale, color: Colors.grey[600])),
                 SizedBox(height: 4 * scale),
-                Text(
-                  name,
-                  style: TextStyle(
-                    fontFamily: 'GolosB',
-                    fontSize: 16 * scale,
-                    color: color,
-                  ),
-                ),
+                Text(name,
+                    style: TextStyle(fontFamily: 'GolosB', fontSize: 16 * scale, color: color)),
                 if (date != null) ...[
                   SizedBox(height: 4 * scale),
-                  Text(
-                    _formatDate(date),
-                    style: TextStyle(
-                      fontFamily: 'GolosR',
-                      fontSize: 12 * scale,
-                      color: Colors.grey[500],
-                    ),
-                  ),
+                  Text(_formatDate(date),
+                      style: TextStyle(fontFamily: 'GolosR', fontSize: 12 * scale, color: Colors.grey[500])),
                 ],
               ],
             ),
@@ -507,6 +460,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     final hasImage = widget.task['imageBase64'] != null && widget.task['imageBase64'].isNotEmpty;
     final hasResultImage = widget.task['resultImageBase64'] != null && widget.task['resultImageBase64'].isNotEmpty;
     final status = widget.task['status'] ?? 'active';
+    final bool isIPK = widget.task['isIPK'] == true;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -515,11 +469,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Colors.white,
-              Colors.white,
-              Color(0xFFFEF2F2),
-            ],
+            colors: [Colors.white, Colors.white, Color(0xFFFEF2F2)],
           ),
         ),
         child: Column(
@@ -527,17 +477,11 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
             AppBar(
               title: Container(
                 width: MediaQuery.of(context).size.width * 0.7,
-                child: Text(
-                  'Задание ${widget.taskNumber} - №${widget.orderNumber}',
-                  style: TextStyle(
-                    fontFamily: 'GolosB',
-                    color: Colors.black,
-                    fontSize: 16 * scale,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                ),
+                child: Text('Задание ${widget.taskNumber} - №${widget.orderNumber}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontFamily: 'GolosB', color: Colors.black, fontSize: 16 * scale)),
               ),
               backgroundColor: Colors.transparent,
               elevation: 0,
@@ -554,27 +498,22 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                       width: double.infinity,
                       padding: EdgeInsets.all(12 * scale),
                       decoration: BoxDecoration(
-                        color: _getStatusColor(status).withOpacity(0.1),
+                        color: _statusColor(status).withOpacity(0.1),
                         borderRadius: BorderRadius.circular(10 * scale),
-                        border: Border.all(color: _getStatusColor(status)),
+                        border: Border.all(color: _statusColor(status)),
                       ),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(
-                            _getStatusIcon(status),
-                            color: _getStatusColor(status),
-                            size: 20 * scale,
-                          ),
+                          Icon(_statusIcon(status), color: _statusColor(status), size: 20 * scale),
                           SizedBox(width: 8 * scale),
                           Flexible(
                             child: Text(
-                              _getStatusText(status),
+                              _statusText(status),
                               style: TextStyle(
-                                fontSize: _getStatusFontSize(status) * scale,
-                                fontFamily: 'GolosB',
-                                color: _getStatusColor(status),
-                              ),
+                                  fontSize: status == 'completed' || status == 'rejected' ? 14 * scale : 16 * scale,
+                                  fontFamily: 'GolosB',
+                                  color: _statusColor(status)),
                               textAlign: TextAlign.center,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
@@ -583,78 +522,20 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                         ],
                       ),
                     ),
-
                     SizedBox(height: 20 * scale),
-
-                    Text(
-                      'Заказ:',
-                      style: TextStyle(
-                        fontSize: 18 * scale,
-                        fontFamily: 'GolosB',
-                        color: Colors.black,
-                      ),
-                    ),
+                    Text('Заказ:', style: TextStyle(fontSize: 18 * scale, fontFamily: 'GolosB', color: Colors.black)),
                     SizedBox(height: 5 * scale),
-                    Text(
-                      '№${widget.orderNumber}',
-                      style: TextStyle(
-                        fontSize: 16 * scale,
-                        fontFamily: 'GolosR',
-                        color: Colors.black87,
-                      ),
-                    ),
-
+                    Text('№${widget.orderNumber}', style: TextStyle(fontSize: 16 * scale, fontFamily: 'GolosR', color: Colors.black87)),
                     SizedBox(height: 20 * scale),
-
-                    Text(
-                      'Участники задания:',
-                      style: TextStyle(
-                        fontSize: 18 * scale,
-                        fontFamily: 'GolosB',
-                        color: Colors.black,
-                      ),
-                    ),
+                    Text('Участники задания:', style: TextStyle(fontSize: 18 * scale, fontFamily: 'GolosB', color: Colors.black)),
                     SizedBox(height: 12 * scale),
-
-                    _buildUserInfoCard(
-                      'ЗАКАЗЧИК',
-                      creatorName,
-                      widget.task['createdAt'],
-                      Icons.person_outline,
-                      Colors.blue,
-                      context,
-                    ),
-
+                    _buildUserInfoCard('ЗАКАЗЧИК', creatorName, widget.task['createdAt'], Icons.person_outline, Colors.blue),
                     if (widget.task['completedBy'] != null)
-                      _buildUserInfoCard(
-                        'ИСПОЛНИТЕЛЬ',
-                        executorName,
-                        widget.task['completedAt'],
-                        Icons.work_outline,
-                        Colors.green,
-                        context,
-                      ),
-
+                      _buildUserInfoCard('ИСПОЛНИТЕЛЬ', executorName, widget.task['completedAt'], Icons.work_outline, Colors.green),
                     if (widget.task['reviewedBy'] != null)
-                      _buildUserInfoCard(
-                        'ПРОВЕРИЛ',
-                        reviewerName,
-                        widget.task['reviewedAt'],
-                        Icons.verified_outlined,
-                        Colors.orange,
-                        context,
-                      ),
-
+                      _buildUserInfoCard('ПРОВЕРИЛ', reviewerName, widget.task['reviewedAt'], Icons.verified_outlined, Colors.orange),
                     SizedBox(height: 20 * scale),
-
-                    Text(
-                      'Описание задания:',
-                      style: TextStyle(
-                        fontSize: 18 * scale,
-                        fontFamily: 'GolosB',
-                        color: Colors.black,
-                      ),
-                    ),
+                    Text('Описание задания:', style: TextStyle(fontSize: 18 * scale, fontFamily: 'GolosB', color: Colors.black)),
                     SizedBox(height: 10 * scale),
                     Container(
                       width: double.infinity,
@@ -666,44 +547,18 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                       ),
                       child: Text(
                         widget.task['taskDescription']?.toString() ?? 'Описание отсутствует',
-                        style: TextStyle(
-                          fontSize: 16 * scale,
-                          fontFamily: 'GolosR',
-                          color: Colors.black87,
-                          height: 1.4,
-                        ),
+                        style: TextStyle(fontSize: 16 * scale, fontFamily: 'GolosR', color: Colors.black87, height: 1.4),
                       ),
                     ),
-
                     SizedBox(height: 30 * scale),
-
-                    Text(
-                      'Исходное изображение:',
-                      style: TextStyle(
-                        fontSize: 18 * scale,
-                        fontFamily: 'GolosB',
-                        color: Colors.black,
-                      ),
-                    ),
+                    Text('Исходное изображение:', style: TextStyle(fontSize: 18 * scale, fontFamily: 'GolosB', color: Colors.black)),
                     SizedBox(height: 10 * scale),
-
                     if (hasImage) ...[
-                      _buildInteractiveImage(
-                        context,
-                        widget.task['imageBase64']!,
-                        'Исходное изображение задания',
-                        Colors.blue,
-                      ),
+                      _buildInteractiveImage(context, widget.task['imageBase64']!, 'Исходное изображение задания', Colors.blue),
                       SizedBox(height: 10 * scale),
-                      Text(
-                        'Нажмите на изображение для приближения',
-                        style: TextStyle(
-                          fontFamily: 'GolosR',
-                          color: Colors.blue,
-                          fontSize: 12 * scale,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
+                      Text('Нажмите на изображение для приближения',
+                          style: TextStyle(fontFamily: 'GolosR', color: Colors.blue, fontSize: 12 * scale),
+                          textAlign: TextAlign.center),
                     ] else ...[
                       Container(
                         width: double.infinity,
@@ -715,108 +570,61 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                         ),
                         child: Column(
                           children: [
-                            Icon(
-                              Icons.photo_library,
-                              color: Colors.grey,
-                              size: 50 * scale,
-                            ),
+                            Icon(Icons.photo_library, color: Colors.grey, size: 50 * scale),
                             SizedBox(height: 10 * scale),
-                            Text(
-                              'Исходное изображение не прикреплено',
-                              style: TextStyle(
-                                fontFamily: 'GolosR',
-                                color: Colors.grey,
-                                fontSize: 14 * scale,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
+                            Text('Исходное изображение не прикреплено',
+                                style: TextStyle(fontFamily: 'GolosR', color: Colors.grey, fontSize: 14 * scale)),
                           ],
                         ),
                       ),
                     ],
-
                     if (hasResultImage) ...[
                       SizedBox(height: 30 * scale),
-                      Text(
-                        'Фото результата:',
-                        style: TextStyle(
-                          fontSize: 18 * scale,
-                          fontFamily: 'GolosB',
-                          color: Colors.black,
-                        ),
-                      ),
+                      Text('Фото результата:', style: TextStyle(fontSize: 18 * scale, fontFamily: 'GolosB', color: Colors.black)),
                       SizedBox(height: 10 * scale),
-                      _buildInteractiveImage(
-                        context,
-                        widget.task['resultImageBase64']!,
-                        'Фото выполненной работы',
-                        Colors.green,
-                      ),
+                      _buildInteractiveImage(context, widget.task['resultImageBase64']!, 'Фото выполненной работы', Colors.green),
                       SizedBox(height: 10 * scale),
-                      Text(
-                        'Нажмите на изображение для приближения',
-                        style: TextStyle(
-                          fontFamily: 'GolosR',
-                          color: Colors.green,
-                          fontSize: 12 * scale,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
+                      Text('Нажмите на изображение для приближения',
+                          style: TextStyle(fontFamily: 'GolosR', color: Colors.green, fontSize: 12 * scale),
+                          textAlign: TextAlign.center),
                     ],
-
                     _buildReviewButtons(context),
-
-                    if (userSpecialization != 4 && status == 'rejected') ...[
+                    _buildDeleteTaskSection(context),
+                    if (userSpec != 4 && userSpec != 5 && status == 'rejected') ...[
                       SizedBox(height: 20 * scale),
                       Container(
                         width: double.infinity,
                         height: 45 * scale,
                         child: ElevatedButton(
                           onPressed: () {
-                            Navigator.pushNamed(
-                              context,
-                              '/TaskPhotoScreen',
-                              arguments: {
-                                'orderNumber': widget.orderNumber,
-                                'collectionName': widget.collectionName,
-                                'taskIndex': widget.taskIndex,
-                                'task': widget.task,
-                                'taskNumber': widget.taskNumber,
-                              },
-                            );
+                            Navigator.pushNamed(context, '/TaskPhotoScreen', arguments: {
+                              'orderNumber': widget.orderNumber,
+                              'collectionName': widget.collectionName,
+                              'taskIndex': widget.taskIndex,
+                              'task': widget.task,
+                              'taskNumber': widget.taskNumber,
+                            });
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.orange,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10 * scale),
-                            ),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
                           ),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.refresh,
-                                  color: Colors.white,
-                                  size: 20 * scale
-                              ),
+                              Icon(Icons.refresh, color: Colors.white, size: 20 * scale),
                               SizedBox(width: 8 * scale),
                               Flexible(
-                                child: Text(
-                                  'Переделать задание',
-                                  style: TextStyle(
-                                    fontSize: 16 * scale,
-                                    fontFamily: 'GolosB',
-                                    color: Colors.white,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                                child: Text('Переделать задание',
+                                    style: TextStyle(fontSize: 16 * scale, fontFamily: 'GolosB', color: Colors.white),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis),
                               ),
                             ],
                           ),
                         ),
                       ),
                     ],
-
                     SizedBox(height: 30 * scale),
                   ],
                 ),
@@ -828,19 +636,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     );
   }
 
-  Widget _buildInteractiveImage(
-      BuildContext context,
-      String base64String,
-      String title,
-      Color color, {
-        bool isResult = false,
-      }) {
+  Widget _buildInteractiveImage(BuildContext context, String base64String, String title, Color color) {
     final scale = getScaleFactor(context);
-
     return GestureDetector(
-      onTap: () {
-        _showFullScreenImage(context, base64String, title);
-      },
+      onTap: () => _showFullScreenImage(context, base64String, title),
       child: Container(
         width: double.infinity,
         decoration: BoxDecoration(
@@ -850,38 +649,22 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
         child: Column(
           children: [
             Container(
-              constraints: BoxConstraints(
-                maxHeight: 300 * scale,
-                minHeight: 200 * scale,
+              constraints: BoxConstraints(maxHeight: 300 * scale, minHeight: 200 * scale),
+              child: Image.memory(
+                base64.decode(base64String),
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => Center(child: Icon(Icons.error, color: Colors.red, size: 40 * scale)),
               ),
-              child: _buildImageFromBase64(base64String, context),
             ),
             Container(
-              padding: EdgeInsets.all(10 * scale),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.05),
-                borderRadius: BorderRadius.only(
-                  bottomLeft: Radius.circular(10 * scale),
-                  bottomRight: Radius.circular(10 * scale),
-                ),
-              ),
+              padding: EdgeInsets.all(8 * scale),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
-                    Icons.zoom_in,
-                    color: color,
-                    size: 16 * scale,
-                  ),
+                  Icon(Icons.zoom_in, color: color, size: 16 * scale),
                   SizedBox(width: 6 * scale),
-                  Text(
-                    'Нажмите для приближения',
-                    style: TextStyle(
-                      fontFamily: 'GolosR',
-                      color: color,
-                      fontSize: 12 * scale,
-                    ),
-                  ),
+                  Text('Нажмите для приближения',
+                      style: TextStyle(fontFamily: 'GolosR', color: color, fontSize: 12 * scale)),
                 ],
               ),
             ),
@@ -891,165 +674,65 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     );
   }
 
-  Widget _buildImageFromBase64(String base64String, BuildContext context) {
-    final scale = getScaleFactor(context);
-
-    try {
-      final bytes = base64.decode(base64String);
-      return Image.memory(
-        bytes,
-        fit: BoxFit.contain,
-        width: double.infinity,
-        errorBuilder: (context, error, stackTrace) {
-          return Container(
-            height: 200 * scale,
-            padding: EdgeInsets.all(20 * scale),
-            child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.error,
-                      color: Colors.red,
-                      size: 40 * scale
-                  ),
-                  SizedBox(height: 10 * scale),
-                  Text(
-                    'Ошибка загрузки изображения',
-                    style: TextStyle(
-                      fontFamily: 'GolosR',
-                      color: Colors.red,
-                      fontSize: 14 * scale,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      );
-    } catch (e) {
-      return Container(
-        height: 200 * scale,
-        padding: EdgeInsets.all(20 * scale),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.error,
-                  color: Colors.red,
-                  size: 40 * scale
-              ),
-              SizedBox(height: 10 * scale),
-              Text(
-                'Неверный формат изображения',
-                style: TextStyle(
-                  fontFamily: 'GolosR',
-                  color: Colors.red,
-                  fontSize: 14 * scale,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-  }
-
   void _showFullScreenImage(BuildContext context, String base64String, String title) {
     try {
       final bytes = base64.decode(base64String);
-
       showDialog(
         context: context,
-        builder: (context) {
-          return Dialog(
-            backgroundColor: Colors.black,
-            insetPadding: EdgeInsets.zero,
-            child: Container(
-              width: MediaQuery.of(context).size.width,
-              height: MediaQuery.of(context).size.height,
-              child: Column(
-                children: [
-                  Container(
-                    padding: EdgeInsets.all(16),
-                    color: Colors.black,
-                    child: Row(
-                      children: [
-                        Icon(Icons.photo,
-                            color: Colors.white,
-                            size: 20
-                        ),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            title,
-                            style: TextStyle(
-                              fontFamily: 'GolosB',
-                              color: Colors.white,
-                              fontSize: 16,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        SizedBox(width: 8),
-                        GestureDetector(
-                          onTap: () => Navigator.of(context).pop(),
-                          child: Container(
-                            padding: EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.black54,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Icon(
-                              Icons.close,
-                              color: Colors.white,
-                              size: 24,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: InteractiveViewer(
-                      panEnabled: true,
-                      minScale: 0.1,
-                      maxScale: 5.0,
-                      boundaryMargin: EdgeInsets.all(20),
-                      child: Center(
-                        child: Image.memory(
-                          bytes,
-                          fit: BoxFit.contain,
+        builder: (_) => Dialog(
+          backgroundColor: Colors.black,
+          insetPadding: EdgeInsets.zero,
+          child: Container(
+            width: MediaQuery.of(context).size.width,
+            height: MediaQuery.of(context).size.height,
+            child: Column(
+              children: [
+                Container(
+                  padding: EdgeInsets.all(16),
+                  color: Colors.black,
+                  child: Row(
+                    children: [
+                      Icon(Icons.photo, color: Colors.white, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(title,
+                            style: TextStyle(fontFamily: 'GolosB', color: Colors.white, fontSize: 16),
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                      GestureDetector(
+                        onTap: () => Navigator.of(context).pop(),
+                        child: Container(
+                          padding: EdgeInsets.all(8),
+                          decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
+                          child: Icon(Icons.close, color: Colors.white, size: 24),
                         ),
                       ),
-                    ),
+                    ],
                   ),
-                  Container(
-                    padding: EdgeInsets.all(12),
-                    color: Colors.black54,
-                    child: Text(
-                      'Используйте жесты для масштабирования и перемещения',
-                      style: TextStyle(
-                        fontFamily: 'GolosR',
-                        color: Colors.white,
-                        fontSize: 12,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
+                ),
+                Expanded(
+                  child: InteractiveViewer(
+                    panEnabled: true,
+                    minScale: 0.1,
+                    maxScale: 5.0,
+                    boundaryMargin: EdgeInsets.all(20),
+                    child: Center(child: Image.memory(bytes, fit: BoxFit.contain)),
                   ),
-                ],
-              ),
+                ),
+                Container(
+                  padding: EdgeInsets.all(12),
+                  color: Colors.black54,
+                  child: Text('Используйте жесты для масштабирования и перемещения',
+                      style: TextStyle(fontFamily: 'GolosR', color: Colors.white, fontSize: 12),
+                      textAlign: TextAlign.center),
+                ),
+              ],
             ),
-          );
-        },
+          ),
+        ),
       );
     } catch (e) {
-      CustomSnackBar.showError(
-        context: context,
-        message: 'Ошибка открытия изображения',
-      );
+      CustomSnackBar.showError(context: context, message: 'Ошибка открытия изображения');
     }
   }
 
@@ -1057,19 +740,8 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     try {
       final date = DateTime.parse(dateString);
       return '${date.day.toString().padLeft(2, '0')}.${date.month.toString().padLeft(2, '0')}.${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
-    } catch (e) {
+    } catch (_) {
       return dateString;
-    }
-  }
-
-  double _getStatusFontSize(String status) {
-    switch (status) {
-      case 'completed':
-        return 14.0;
-      case 'rejected':
-        return 14.0;
-      default:
-        return 16.0;
     }
   }
 }

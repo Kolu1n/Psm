@@ -4,15 +4,14 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:psm/pages/TasksScreen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:psm/custom_snackbar.dart';
-import 'package:async/async.dart'; // для StreamZip
 
-class SborkaScreen extends StatefulWidget {
-  const SborkaScreen({Key? key}) : super(key: key);
+class IPKPacetScreen extends StatefulWidget {
+  const IPKPacetScreen({Key? key}) : super(key: key);
   @override
-  State<SborkaScreen> createState() => _SborkaScreenState();
+  State<IPKPacetScreen> createState() => _IPKPacetScreenState();
 }
 
-class _SborkaScreenState extends State<SborkaScreen> {
+class _IPKPacetScreenState extends State<IPKPacetScreen> {
   int? userSpec;
   bool isLoading = true;
 
@@ -33,10 +32,10 @@ class _SborkaScreenState extends State<SborkaScreen> {
   @override
   void initState() {
     super.initState();
-    _loadUserSpec();
+    _load();
   }
 
-  Future<void> _loadUserSpec() async {
+  Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getInt('userSpecialization');
     if (saved != null && saved != 0) {
@@ -64,31 +63,40 @@ class _SborkaScreenState extends State<SborkaScreen> {
     }
   }
 
-  Future<void> _confirmDelete(BuildContext context, String docId, bool isIPK) async {
-    if (userSpec != 4) return; // удалять может только ИТМ
+  Future<void> _confirmDelete(String docId) async {
+    if (userSpec != 5) return;
     final scale = getScaleFactor(context);
     final yes = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        title: Text('Удаление заказа', style: TextStyle(fontFamily: 'GolosB', fontSize: 19 * scale)),
+        title: Text('Удаление заказа', style: TextStyle(fontFamily: 'GolosB', fontSize: 19)),
         content: Text('Вы уверены, что хотите удалить этот заказ?',
-            style: TextStyle(fontFamily: 'GolosR', fontSize: 16 * scale)),
+            style: TextStyle(fontFamily: 'GolosR')),
         actions: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               Expanded(
-                child: OutlinedButton(
-                  child: Text('Отмена', style: TextStyle(color: Colors.grey, fontFamily: 'GolosR', fontSize: 14 * scale)),
-                  onPressed: () => Navigator.of(context).pop(false),
-                  style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.grey)),
+                child: Container(
+                  height: 40 * scale,
+                  margin: EdgeInsets.only(right: 8 * scale),
+                  child: OutlinedButton(
+                    child: Text('Отмена', style: TextStyle(color: Colors.grey, fontFamily: 'GolosR', fontSize: 14 * scale)),
+                    onPressed: () => Navigator.pop(context, false),
+                    style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.grey)),
+                  ),
                 ),
               ),
               Expanded(
-                child: ElevatedButton(
-                  child: Text('Да', style: TextStyle(color: Colors.white, fontFamily: 'GolosB', fontSize: 14 * scale)),
-                  onPressed: () => Navigator.of(context).pop(true),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                child: Container(
+                  height: 40 * scale,
+                  margin: EdgeInsets.only(left: 8 * scale),
+                  child: ElevatedButton(
+                    child: Text('Да', style: TextStyle(color: Colors.white, fontFamily: 'GolosB', fontSize: 14 * scale)),
+                    onPressed: () => Navigator.pop(context, true),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                  ),
                 ),
               ),
             ],
@@ -97,13 +105,12 @@ class _SborkaScreenState extends State<SborkaScreen> {
       ),
     );
     if (yes == true) {
-      final collection = isIPK ? 'IPKSborka' : 'Sborka';
-      await FirebaseFirestore.instance.collection(collection).doc(docId).delete();
+      await FirebaseFirestore.instance.collection('IPKPacet').doc(docId).delete();
       CustomSnackBar.showError(context: context, message: 'Заказ удалён');
     }
   }
 
-  Future<void> _logout(BuildContext context) async {
+  Future<void> _logout() async {
     final scale = getScaleFactor(context);
     final yes = await showDialog<bool>(
       context: context,
@@ -115,31 +122,39 @@ class _SborkaScreenState extends State<SborkaScreen> {
             style: TextStyle(fontSize: 14 * scale, fontFamily: 'GolosR', color: Colors.black54)),
         actions: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               Expanded(
-                child: OutlinedButton(
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: Colors.red, width: 2),
-                    backgroundColor: Colors.red,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
+                child: Container(
+                  height: 40 * scale,
+                  margin: EdgeInsets.only(right: 8 * scale),
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: Colors.red, width: 2),
+                      backgroundColor: Colors.red,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
+                    ),
+                    onPressed: () => Navigator.pop(context),
+                    child: Text('Отмена', style: TextStyle(color: Colors.white, fontSize: 14 * scale)),
                   ),
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: Text('Отмена', style: TextStyle(color: Colors.white, fontSize: 14 * scale)),
                 ),
               ),
-              SizedBox(width: 8),
               Expanded(
-                child: OutlinedButton(
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: Colors.grey, width: 2),
-                    backgroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
+                child: Container(
+                  height: 40 * scale,
+                  margin: EdgeInsets.only(left: 8 * scale),
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: Colors.grey, width: 2),
+                      backgroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
+                    ),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _doLogout();
+                    },
+                    child: Text('Выйти', style: TextStyle(color: Colors.grey, fontSize: 14 * scale)),
                   ),
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    _doLogout();
-                  },
-                  child: Text('Выйти', style: TextStyle(color: Colors.grey, fontSize: 14 * scale)),
                 ),
               ),
             ],
@@ -158,12 +173,12 @@ class _SborkaScreenState extends State<SborkaScreen> {
     Navigator.pushReplacementNamed(context, '/MS_W');
   }
 
-  Widget _buildLeading(String orderId, bool isIPK) {
+  Widget _leading(String orderId) {
     final scale = getScaleFactor(context);
     if (isLoading) {
       return Container(width: 40 * scale, height: 40 * scale, child: CircularProgressIndicator(strokeWidth: 2));
     }
-    if (userSpec == 4) {
+    if (userSpec == 5) {
       return Container(
         width: 40 * scale,
         height: 40 * scale,
@@ -171,7 +186,7 @@ class _SborkaScreenState extends State<SborkaScreen> {
         child: Center(
           child: IconButton(
             icon: Icon(Icons.delete_forever_rounded, color: Colors.white, size: 20 * scale),
-            onPressed: () => _confirmDelete(context, orderId, isIPK),
+            onPressed: () => _confirmDelete(orderId),
           ),
         ),
       );
@@ -217,7 +232,7 @@ class _SborkaScreenState extends State<SborkaScreen> {
             AppBar(
               title: Container(
                 width: MediaQuery.of(context).size.width * 0.7,
-                child: Text('Заказы Сборка',
+                child: Text('Заказы ИПК Пакетировка',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
@@ -228,68 +243,56 @@ class _SborkaScreenState extends State<SborkaScreen> {
               iconTheme: IconThemeData(color: Colors.red, size: 24 * scale),
               centerTitle: true,
               actions: [
-                if (userSpec != null && userSpec != 4)
+                if (userSpec != null && userSpec != 5)
                   Padding(
                     padding: EdgeInsets.only(right: 8.0 * scale),
                     child: IconButton(
                       icon: Icon(Icons.logout, size: 24 * scale),
-                      onPressed: () => _logout(context),
+                      onPressed: _logout,
                       color: Colors.red,
                     ),
                   ),
               ],
             ),
             Expanded(
-              child: StreamBuilder<List<QuerySnapshot>>(
-                stream: StreamZip([
-                  FirebaseFirestore.instance.collection('Sborka').orderBy('orderNumber').snapshots(),
-                  FirebaseFirestore.instance.collection('IPKSborka').orderBy('orderNumber').snapshots(),
-                ]),
-                builder: (context, snapshot) {
-                  if (snapshot.hasError) {
-                    return Center(child: Text('Ошибка загрузки данных', style: TextStyle(fontFamily: 'GolosR', fontSize: 16 * scale)));
+              child: StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance.collection('IPKPacet').orderBy('orderNumber').snapshots(),
+                builder: (context, snap) {
+                  if (snap.hasError) {
+                    return Center(child: Text('Ошибка загрузки данных', style: TextStyle(fontFamily: 'GolosR')));
                   }
-                  if (snapshot.connectionState == ConnectionState.waiting) {
+                  if (snap.connectionState == ConnectionState.waiting) {
                     return Center(child: CircularProgressIndicator(color: Colors.red));
                   }
-
-                  final normalDocs = snapshot.data?[0].docs ?? [];
-                  final ipkDocs = snapshot.data?[1].docs ?? [];
-                  final allDocs = [...normalDocs, ...ipkDocs];
-
-                  if (allDocs.isEmpty) {
+                  final orders = snap.data!.docs;
+                  if (orders.isEmpty) {
                     return Center(
-                      child: Text('Заказов для сборки пока нет',
+                      child: Text('Заказов для пакетировки пока нет',
                           style: TextStyle(fontFamily: 'GolosR', fontSize: 16 * scale, color: Colors.grey)),
                     );
                   }
-
                   return ListView.builder(
                     padding: EdgeInsets.all(15 * scale),
-                    itemCount: allDocs.length,
+                    itemCount: orders.length,
                     itemBuilder: (_, i) {
-                      final order = allDocs[i];
+                      final order = orders[i];
                       final data = order.data() as Map<String, dynamic>;
                       final tasks = data['tasks'] as List? ?? [];
-                      final bool isIPK = order.reference.path.startsWith('IPK');
-
-                      // 🔴 ЕСЛИ ХОТЯ БЫ ОДНО ЗАДАНИЕ С isIPK == true
                       final bool hasIPKTask = tasks.any((t) => t['isIPK'] == true);
 
                       return Card(
-                        color: isIPK ? Colors.white.withOpacity(0.98) : Colors.white,
+                        color: Colors.white.withOpacity(0.98),
                         margin: EdgeInsets.only(bottom: 12 * scale),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(15 * scale),
-                          side: isIPK || hasIPKTask ? BorderSide(color: Colors.red, width: 2) : BorderSide.none,
+                          side: hasIPKTask ? BorderSide(color: Colors.red, width: 2) : BorderSide.none,
                         ),
                         elevation: 2,
                         child: ListTile(
                           contentPadding: EdgeInsets.all(15 * scale),
-                          leading: _buildLeading(order.id, isIPK),
+                          leading: _leading(order.id),
                           title: Row(
                             children: [
-                              // 🔴 СТИЛЬНЫЙ ЗНАЧОК ИПК (точь-в-точь по вашему образцу)
                               if (hasIPKTask)
                                 Container(
                                   padding: EdgeInsets.symmetric(
@@ -311,13 +314,9 @@ class _SborkaScreenState extends State<SborkaScreen> {
                                   ),
                                 ),
                               if (hasIPKTask) SizedBox(width: 6 * scale),
-
-                              // Номер заказа
                               Expanded(
-                                child: Text(
-                                  'Заказ №${data['orderNumber']}',
-                                  style: TextStyle(fontFamily: 'GolosB', fontSize: 16 * scale),
-                                ),
+                                child: Text('Заказ №${data['orderNumber']}',
+                                    style: TextStyle(fontFamily: 'GolosB', fontSize: 16 * scale)),
                               ),
                             ],
                           ),
@@ -338,8 +337,8 @@ class _SborkaScreenState extends State<SborkaScreen> {
                           onTap: () {
                             Navigator.pushNamed(context, '/Tasks', arguments: {
                               'orderNumber': data['orderNumber'],
-                              'collectionName': isIPK ? 'IPKSborka' : 'Sborka',
-                              'screenTitle': isIPK ? 'ИПК Сборка' : 'Сборка',
+                              'collectionName': 'IPKPacet',
+                              'screenTitle': 'ИПК Пакетировка',
                             });
                           },
                         ),
