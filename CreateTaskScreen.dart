@@ -24,6 +24,7 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
   final ImagePicker _picker = ImagePicker();
 
   final List<String> _taskTypes = ['Сборка', 'Монтаж', 'Пакетирование'];
+  int penis = 2;
 
   final Map<String, String> _collectionMap = {
     'Сборка': 'Sborka',
@@ -46,7 +47,7 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
     if (diagonal < 800) return 1.2;
     if (diagonal < 1000) return 1.3;
     return 1.4;
-  } //кто это читает тот лох
+  } 
 
   @override
   void initState() {
