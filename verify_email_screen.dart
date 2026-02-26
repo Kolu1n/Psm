@@ -176,6 +176,13 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
                 ),
                 textAlign: TextAlign.center,
               ),
+              SizedBox(height: 17 * scale),
+              Text('(В случает отсутсвия письма, проверьте спам)',
+                  style: TextStyle(
+                  fontSize: 11 * scale,
+                  fontFamily: 'GolosR'
+              ),
+          textAlign: TextAlign.center,),
               SizedBox(height: 30 * scale),
               OutlinedButton.icon(
                 onPressed: canResendEmail && !isLoading ? sendVerificationEmail : null,

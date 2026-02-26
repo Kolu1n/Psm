@@ -71,32 +71,24 @@ class _IPKPacetScreenState extends State<IPKPacetScreen> {
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         title: Text('Удаление заказа', style: TextStyle(fontFamily: 'GolosB', fontSize: 19)),
-        content: Text('Вы уверены, что хотите удалить этот заказ?',
+        content: Text('Вы уверены, что хотите удалить ИПК-задания из этого заказа?',
             style: TextStyle(fontFamily: 'GolosR')),
         actions: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               Expanded(
-                child: Container(
-                  height: 40 * scale,
-                  margin: EdgeInsets.only(right: 8 * scale),
-                  child: OutlinedButton(
-                    child: Text('Отмена', style: TextStyle(color: Colors.grey, fontFamily: 'GolosR', fontSize: 14 * scale)),
-                    onPressed: () => Navigator.pop(context, false),
-                    style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.grey)),
-                  ),
+                child: OutlinedButton(
+                  child: Text('Отмена', style: TextStyle(color: Colors.grey, fontFamily: 'GolosR', fontSize: 14)),
+                  onPressed: () => Navigator.pop(context, false),
+                  style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.grey)),
                 ),
               ),
+              SizedBox(width: 8 * scale),
               Expanded(
-                child: Container(
-                  height: 40 * scale,
-                  margin: EdgeInsets.only(left: 8 * scale),
-                  child: ElevatedButton(
-                    child: Text('Да', style: TextStyle(color: Colors.white, fontFamily: 'GolosB', fontSize: 14 * scale)),
-                    onPressed: () => Navigator.pop(context, true),
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                  ),
+                child: ElevatedButton(
+                  child: Text('Да', style: TextStyle(color: Colors.white, fontFamily: 'GolosB', fontSize: 14)),
+                  onPressed: () => Navigator.pop(context, true),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
                 ),
               ),
             ],
@@ -105,10 +97,38 @@ class _IPKPacetScreenState extends State<IPKPacetScreen> {
       ),
     );
     if (yes == true) {
-      await FirebaseFirestore.instance.collection('IPKPacet').doc(docId).delete();
-      CustomSnackBar.showError(context: context, message: 'Заказ удалён');
-    }
-  }
+      // 🔴 ИЗМЕНЕНО: Удаляем только ИПК-задания, оставляем задания ИТР
+      final orderDoc = FirebaseFirestore.instance.collection('Pacet').doc(docId);
+      final orderSnapshot = await orderDoc.get();
+
+      if (orderSnapshot.exists) {
+        final data = orderSnapshot.data()!;
+        final tasks = data['tasks'] as List? ?? [];
+
+        // Оставляем только задания ИТР (не ИПК)
+        final nonIPKTasks = tasks.where((task) => task['isIPK'] != true).toList();
+
+        if (nonIPKTasks.isEmpty) {
+          // Если заданий ИТР не осталось, удаляем весь заказ
+          await orderDoc.delete();
+          CustomSnackBar.showSuccess(context: context, message: 'Заказ полностью удалён');
+        } else {
+          // Иначе обновляем заказ с заданиями ИТР
+          for (int i = 0; i < nonIPKTasks.length; i++) {
+            nonIPKTasks[i]['taskNumber'] = i + 1;
+          }
+          await orderDoc.update({
+            'tasks': nonIPKTasks,
+            'hasIPKTask': false,
+            'updatedAt': DateTime.now().toIso8601String(),
+          });
+          CustomSnackBar.showSuccess(context: context, message: 'ИПК-задания удалены');
+        }
+      }
+
+      // 🔴 ДОБАВЛЕНО: Автоматический выход
+      Navigator.of(context).pop();
+    }  }
 
   Future<void> _logout() async {
     final scale = getScaleFactor(context);
@@ -122,39 +142,31 @@ class _IPKPacetScreenState extends State<IPKPacetScreen> {
             style: TextStyle(fontSize: 14 * scale, fontFamily: 'GolosR', color: Colors.black54)),
         actions: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               Expanded(
-                child: Container(
-                  height: 40 * scale,
-                  margin: EdgeInsets.only(right: 8 * scale),
-                  child: OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: Colors.red, width: 2),
-                      backgroundColor: Colors.red,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
-                    ),
-                    onPressed: () => Navigator.pop(context),
-                    child: Text('Отмена', style: TextStyle(color: Colors.white, fontSize: 14 * scale)),
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: Colors.red, width: 2),
+                    backgroundColor: Colors.red,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
                   ),
+                  onPressed: () => Navigator.pop(context),
+                  child: Text('Отмена', style: TextStyle(color: Colors.white, fontSize: 14 * scale)),
                 ),
               ),
+              SizedBox(width: 8),
               Expanded(
-                child: Container(
-                  height: 40 * scale,
-                  margin: EdgeInsets.only(left: 8 * scale),
-                  child: OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: Colors.grey, width: 2),
-                      backgroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
-                    ),
-                    onPressed: () {
-                      Navigator.pop(context);
-                      _doLogout();
-                    },
-                    child: Text('Выйти', style: TextStyle(color: Colors.grey, fontSize: 14 * scale)),
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: Colors.grey, width: 2),
+                    backgroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
                   ),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _doLogout();
+                  },
+                  child: Text('Выйти', style: TextStyle(color: Colors.grey, fontSize: 14 * scale)),
                 ),
               ),
             ],
@@ -256,7 +268,12 @@ class _IPKPacetScreenState extends State<IPKPacetScreen> {
             ),
             Expanded(
               child: StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance.collection('IPKPacet').orderBy('orderNumber').snapshots(),
+                // 🔴 ИЗМЕНЕНО: Читаем из основной коллекции, фильтруя по hasIPKTask
+                stream: FirebaseFirestore.instance
+                    .collection('Pacet')
+                    .where('hasIPKTask', isEqualTo: true)
+                    .orderBy('orderNumber')
+                    .snapshots(),
                 builder: (context, snap) {
                   if (snap.hasError) {
                     return Center(child: Text('Ошибка загрузки данных', style: TextStyle(fontFamily: 'GolosR')));
@@ -267,7 +284,7 @@ class _IPKPacetScreenState extends State<IPKPacetScreen> {
                   final orders = snap.data!.docs;
                   if (orders.isEmpty) {
                     return Center(
-                      child: Text('Заказов для пакетировки пока нет',
+                      child: Text('Заказов для пакетирования пока нет',
                           style: TextStyle(fontFamily: 'GolosR', fontSize: 16 * scale, color: Colors.grey)),
                     );
                   }
@@ -278,14 +295,17 @@ class _IPKPacetScreenState extends State<IPKPacetScreen> {
                       final order = orders[i];
                       final data = order.data() as Map<String, dynamic>;
                       final tasks = data['tasks'] as List? ?? [];
-                      final bool hasIPKTask = tasks.any((t) => t['isIPK'] == true);
+
+                      // ✅ ФИЛЬТРАЦИЯ: Считаем только ИПК-задания
+                      final ipkTasks = tasks.where((t) => t['isIPK'] == true).toList();
+                      final int taskCount = ipkTasks.length; // Используем отфильтрованное количество
 
                       return Card(
                         color: Colors.white.withOpacity(0.98),
                         margin: EdgeInsets.only(bottom: 12 * scale),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(15 * scale),
-                          side: hasIPKTask ? BorderSide(color: Colors.red, width: 2) : BorderSide.none,
+                          side: BorderSide(color: Colors.red, width: 2), // Всегда красная рамка для ИПК
                         ),
                         elevation: 2,
                         child: ListTile(
@@ -293,27 +313,26 @@ class _IPKPacetScreenState extends State<IPKPacetScreen> {
                           leading: _leading(order.id),
                           title: Row(
                             children: [
-                              if (hasIPKTask)
-                                Container(
-                                  padding: EdgeInsets.symmetric(
-                                    horizontal: 6 * scale,
-                                    vertical: 2 * scale,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.red.withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(6 * scale),
-                                    border: Border.all(color: Colors.red, width: 1),
-                                  ),
-                                  child: Text(
-                                    'ИПК',
-                                    style: TextStyle(
-                                      fontFamily: 'GolosB',
-                                      fontSize: 9 * scale,
-                                      color: Colors.red,
-                                    ),
+                              Container(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: 6 * scale,
+                                  vertical: 2 * scale,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(6 * scale),
+                                  border: Border.all(color: Colors.red, width: 1),
+                                ),
+                                child: Text(
+                                  'ИПК',
+                                  style: TextStyle(
+                                    fontFamily: 'GolosB',
+                                    fontSize: 9 * scale,
+                                    color: Colors.red,
                                   ),
                                 ),
-                              if (hasIPKTask) SizedBox(width: 6 * scale),
+                              ),
+                              SizedBox(width: 6 * scale),
                               Expanded(
                                 child: Text('Заказ №${data['orderNumber']}',
                                     style: TextStyle(fontFamily: 'GolosB', fontSize: 16 * scale)),
@@ -324,7 +343,8 @@ class _IPKPacetScreenState extends State<IPKPacetScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               SizedBox(height: 4 * scale),
-                              Text('Заданий: ${tasks.length}',
+                              // ✅ ИЗМЕНЕНО: показываем количество ИПК-заданий
+                              Text('Заданий: $taskCount',
                                   style: TextStyle(fontFamily: 'GolosR', color: Colors.black, fontSize: 14 * scale)),
                               if (data['createdAt'] != null) ...[
                                 SizedBox(height: 4 * scale),
@@ -337,7 +357,7 @@ class _IPKPacetScreenState extends State<IPKPacetScreen> {
                           onTap: () {
                             Navigator.pushNamed(context, '/Tasks', arguments: {
                               'orderNumber': data['orderNumber'],
-                              'collectionName': 'IPKPacet',
+                              'collectionName': 'Pacet',
                               'screenTitle': 'ИПК Пакетировка',
                             });
                           },

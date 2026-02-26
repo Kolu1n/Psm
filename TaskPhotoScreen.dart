@@ -1,4 +1,3 @@
-// TaskPhotoScreen.dart
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
@@ -20,18 +19,17 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
   String? _base64Image;
   bool isLoading = false;
   String? userName;
+  String? reviewerName; // ✅ будет имя отклонившего
 
   late String orderNumber;
   late String collectionName;
   late int taskIndex;
   late Map<String, dynamic> task;
   late int taskNumber;
+  late String screenTitle;
 
   double getScaleFactor(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    final height = MediaQuery.of(context).size.height;
     final diagonal = MediaQuery.of(context).size.shortestSide;
-
     if (diagonal < 300) return 0.65;
     if (diagonal < 350) return 0.75;
     if (diagonal < 400) return 0.85;
@@ -57,12 +55,27 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
           .collection('users')
           .doc(user.uid)
           .get();
-
       if (userDoc.exists) {
         setState(() {
           userName = userDoc.data()?['displayName'] ?? 'Пользователь';
         });
       }
+    }
+
+    // ✅ Загружаем имя того, кто отклонил
+    final reviewedBy = task['reviewedBy'];
+    if (reviewedBy != null) {
+      final reviewerDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(reviewedBy)
+          .get();
+      setState(() {
+        reviewerName = reviewerDoc.data()?['displayName'] ?? 'ИТР';
+      });
+    } else {
+      setState(() {
+        reviewerName = 'ИТР'; // fallback
+      });
     }
   }
 
@@ -75,6 +88,7 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
     taskIndex = args['taskIndex'];
     task = args['task'];
     taskNumber = args['taskNumber'];
+    screenTitle = args['screenTitle'] ?? 'Задания';
 
     if (task['resultImageBase64'] != null && task['resultImageBase64'].isNotEmpty) {
       _base64Image = task['resultImageBase64'];
@@ -128,7 +142,6 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
 
   Future<void> _showImageSourceDialog() async {
     final scale = getScaleFactor(context);
-
     await showDialog(
       context: context,
       builder: (BuildContext context) {
@@ -165,10 +178,7 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.camera_alt,
-                          color: Colors.white,
-                          size: 20 * scale
-                      ),
+                      Icon(Icons.camera_alt, color: Colors.white, size: 20 * scale),
                       SizedBox(width: 10 * scale),
                       Text(
                         'Сделать снимок',
@@ -200,10 +210,7 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.photo_library,
-                          color: Colors.red,
-                          size: 20 * scale
-                      ),
+                      Icon(Icons.photo_library, color: Colors.red, size: 20 * scale),
                       SizedBox(width: 10 * scale),
                       Text(
                         'Выбрать из галереи',
@@ -358,12 +365,17 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
       CustomSnackBar.showSuccess(
         context: context,
         message: task['status'] == 'rejected'
-            ? 'Фото отправлено на повторную проверку ИТМ'
-            : 'Задание отправлено на проверку ИТМ',
+            ? 'Фото отправлено на повторную проверку'
+            : 'Задание отправлено на проверку',
       );
 
-      Navigator.of(context).pop();
+      await Future.delayed(Duration(milliseconds: 300));
 
+      Navigator.pushReplacementNamed(context, '/Tasks', arguments: {
+        'orderNumber': orderNumber,
+        'collectionName': collectionName,
+        'screenTitle': screenTitle,
+      });
     } catch (e) {
       CustomSnackBar.showError(
         context: context,
@@ -396,10 +408,7 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
                     color: Colors.black,
                     child: Row(
                       children: [
-                        Icon(Icons.photo,
-                            color: Colors.white,
-                            size: 20
-                        ),
+                        Icon(Icons.photo, color: Colors.white, size: 20),
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
@@ -504,10 +513,7 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.error,
-                              color: Colors.red,
-                              size: 40 * scale
-                          ),
+                          Icon(Icons.error, color: Colors.red, size: 40 * scale),
                           SizedBox(height: 10 * scale),
                           Text(
                             'Ошибка загрузки изображения',
@@ -599,16 +605,13 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
             if (userName != null)
               Container(
                 padding: EdgeInsets.symmetric(
-                    horizontal: 20 * scale,
-                    vertical: 5 * scale
+                  horizontal: 20 * scale,
+                  vertical: 5 * scale,
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.person,
-                        color: Colors.grey,
-                        size: 16 * scale
-                    ),
+                    Icon(Icons.person, color: Colors.grey, size: 16 * scale),
                     SizedBox(width: 8 * scale),
                     Text(
                       'Исполнитель: $userName',
@@ -673,10 +676,7 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Icon(Icons.info,
-                                    color: Colors.orange,
-                                    size: 20 * scale
-                                ),
+                                Icon(Icons.info, color: Colors.orange, size: 20 * scale),
                                 SizedBox(width: 8 * scale),
                                 Text(
                                   'Задание требует доработки',
@@ -690,13 +690,43 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
                             ),
                             SizedBox(height: 8 * scale),
                             Text(
-                              'ИТМ отклонил предыдущее фото. Сделайте новое фото результата, оно заменит предыдущее.',
+                              '${reviewerName ?? 'ИТР'} отклонил предыдущее фото. Сделайте новое фото результата, оно заменит предыдущее.',
                               style: TextStyle(
                                 fontSize: 14 * scale,
                                 fontFamily: 'GolosR',
                                 color: Colors.black87,
                               ),
                               textAlign: TextAlign.center,
+                            ),
+                            SizedBox(height: 15 * scale),
+                            ElevatedButton(
+                              onPressed: () {
+                                Navigator.pushNamed(context, '/TaskPhotoScreen', arguments: {
+                                  'orderNumber': orderNumber,
+                                  'collectionName': collectionName,
+                                  'taskIndex': taskIndex,
+                                  'task': task,
+                                  'taskNumber': taskNumber,
+                                  'screenTitle': screenTitle,
+                                });
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.orange,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.refresh, color: Colors.white, size: 20 * scale),
+                                  SizedBox(width: 8 * scale),
+                                  Flexible(
+                                    child: Text('Переделать задание',
+                                        style: TextStyle(fontSize: 16 * scale, fontFamily: 'GolosB', color: Colors.white),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis),
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
                         ),
@@ -781,10 +811,7 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
                           children: [
                             Row(
                               children: [
-                                Icon(Icons.check_circle,
-                                    color: Colors.green,
-                                    size: 16 * scale
-                                ),
+                                Icon(Icons.check_circle, color: Colors.green, size: 16 * scale),
                                 SizedBox(width: 5 * scale),
                                 Text(
                                   isRejected ? 'Новое фото для доработки' : 'Ваше фото результата',
@@ -894,10 +921,7 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.add_photo_alternate,
-                                  color: Colors.white,
-                                  size: 20 * scale
-                              ),
+                              Icon(Icons.add_photo_alternate, color: Colors.white, size: 20 * scale),
                               SizedBox(width: 10 * scale),
                               Text(
                                 _base64Image != null ? 'Заменить фото' : 'Прикрепить фото',
@@ -939,10 +963,7 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
                               : Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.check,
-                                  color: Colors.white,
-                                  size: 20 * scale
-                              ),
+                              Icon(Icons.check, color: Colors.white, size: 20 * scale),
                               SizedBox(width: 10 * scale),
                               Flexible(
                                 child: Text(

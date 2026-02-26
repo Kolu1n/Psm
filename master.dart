@@ -132,52 +132,128 @@ class MasterS extends StatelessWidget {
     }
   }
 
-  Widget buildMenuButton({
+  // 🔴 НОВЫЙ МЕТОД: Кнопка с заголовком и подписью
+  Widget buildMenuButtonWithSubtitle({
     required IconData icon,
-    required String label,
+    required String title,
+    String? subtitle,
     required VoidCallback onPressed,
     Color textColor = Colors.black,
     Color bgColor = Colors.white,
-    bool alignLeft = false,
+    Color borderColor = Colors.red,
     required BuildContext context,
   }) {
     final scale = getScaleFactor(context);
 
     return Container(
       width: double.infinity,
-      height: 60 * scale,
+      height: 70 * scale, // Увеличена высота для двух строк
       margin: EdgeInsets.only(bottom: 15 * scale),
       child: ElevatedButton(
         onPressed: onPressed,
         style: ElevatedButton.styleFrom(
           backgroundColor: bgColor,
           foregroundColor: textColor,
-          side: BorderSide(color: Colors.red, width: 2),
+          side: BorderSide(color: borderColor, width: 2),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15 * scale),
+          ),
+          elevation: 2,
+          padding: EdgeInsets.symmetric(horizontal: 20 * scale),
+        ),
+        child: Row(
+          children: [
+            // Иконка с фоном
+            Container(
+              width: 44 * scale,
+              height: 44 * scale,
+              decoration: BoxDecoration(
+                color: borderColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12 * scale),
+              ),
+              child: Icon(icon, size: 24 * scale, color: borderColor),
+            ),
+            SizedBox(width: 15 * scale),
+            // Текстовая часть
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 18 * scale, // УВЕЛИЧЕН шрифт заголовка
+                      fontFamily: 'GolosB',
+                      color: textColor,
+                      height: 1.2,
+                    ),
+                  ),
+                  if (subtitle != null) ...[
+                    SizedBox(height: 2 * scale),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12 * scale,
+                        fontFamily: 'GolosR',
+                        color: textColor.withOpacity(0.6),
+                        height: 1.2,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            // Стрелка вправо
+            Icon(
+              Icons.arrow_forward_ios,
+              size: 18 * scale,
+              color: borderColor.withOpacity(0.5),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // 🔴 Кнопка для "Добавить замечание" и "Отправить пуш" — компактная, без подписи
+  Widget buildCompactButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+    Color textColor = Colors.black,
+    Color bgColor = Colors.white,
+    Color borderColor = Colors.red,
+    required BuildContext context,
+  }) {
+    final scale = getScaleFactor(context);
+
+    return Container(
+      width: double.infinity,
+      height: 55 * scale,
+      margin: EdgeInsets.only(bottom: 15 * scale),
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: bgColor,
+          foregroundColor: textColor,
+          side: BorderSide(color: borderColor, width: 2),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(15 * scale),
           ),
           elevation: 2,
         ),
         child: Row(
-          mainAxisAlignment: alignLeft ? MainAxisAlignment.start : MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.center,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            SizedBox(
-              width: 40 * scale,
-              child: Icon(icon, size: 24 * scale, color: textColor),
-            ),
+            Icon(icon, size: 22 * scale, color: textColor),
             SizedBox(width: 10 * scale),
-            Expanded(
-              child: Text(
-                label,
-                textAlign: alignLeft ? TextAlign.left : TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 16 * scale,
-                  fontFamily: 'GolosB',
-                  color: textColor,
-                ),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 16 * scale,
+                fontFamily: 'GolosB',
+                color: textColor,
               ),
             ),
           ],
@@ -269,7 +345,7 @@ class MasterS extends StatelessWidget {
                       Container(
                         margin: EdgeInsets.only(bottom: 40 * scale),
                         child: Text(
-                          'Меню ИТМ',
+                          'Меню ИТР',
                           style: TextStyle(
                             fontSize: 28 * scale,
                             fontFamily: 'GolosB',
@@ -278,48 +354,56 @@ class MasterS extends StatelessWidget {
                         ),
                       ),
 
-                      buildMenuButton(
+                      // 🔴 ОСНОВНЫЕ РАЗДЕЛЫ — с подписями и увеличенным шрифтом
+                      buildMenuButtonWithSubtitle(
                         icon: Icons.power_outlined,
-                        label: 'Заказы: электромонтаж',
+                        title: 'Электромонтаж',
                         onPressed: () => Navigator.pushNamed(context, '/Montasch'),
-                        alignLeft: false,
                         context: context,
                       ),
-                      buildMenuButton(
+                      buildMenuButtonWithSubtitle(
                         icon: Icons.build_outlined,
-                        label: 'Заказы: сборка',
+                        title: 'Сборка',
                         onPressed: () => Navigator.pushNamed(context, '/Sborka'),
-                        alignLeft: false,
                         context: context,
                       ),
-                      buildMenuButton(
+                      buildMenuButtonWithSubtitle(
                         icon: Icons.inventory_2_outlined,
-                        label: 'Заказы: пакетирование',
+                        title: 'Пакетирование',
                         onPressed: () => Navigator.pushNamed(context, '/Pacet'),
-                        alignLeft: false,
                         context: context,
                       ),
-                      buildMenuButton(
+
+                      // Разделитель
+                      Container(
+                        margin: EdgeInsets.symmetric(vertical: 15 * scale),
+                        child: Divider(
+                          color: Colors.grey[300],
+                          thickness: 1,
+                        ),
+                      ),
+
+                      buildCompactButton(
                         icon: Icons.note_alt_outlined,
                         label: 'Добавить замечание',
                         onPressed: () => Navigator.pushNamed(context, '/CreateTask'),
                         textColor: Colors.white,
                         bgColor: Colors.red,
-                        alignLeft: false,
+                        borderColor: Colors.red,
                         context: context,
                       ),
-
-                      SizedBox(height: 60 * scale),
-                      buildMenuButton(
+                      SizedBox(height: 25 * scale),
+                      buildCompactButton(
                         icon: Icons.notifications_active,
                         label: 'Отправить пуш работникам',
                         onPressed: () => Navigator.pushNamed(context, '/SendPushScreen'),
                         textColor: Colors.white,
-                        bgColor: Colors.blue, // Синяя кнопка
-                        alignLeft: false,
+                        bgColor: Colors.blue,
+                        borderColor: Colors.blue,
                         context: context,
                       ),
-                      SizedBox(height: 80 * scale),
+
+                      SizedBox(height: 60 * scale),
 
                       Container(
                         margin: EdgeInsets.only(bottom: 10 * scale),

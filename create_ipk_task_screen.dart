@@ -7,6 +7,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:psm/custom_snackbar.dart';
 
 class CreateIPKTaskScreen extends StatefulWidget {
+  const CreateIPKTaskScreen({Key? key}) : super(key: key);
+
   @override
   _CreateIPKTaskScreenState createState() => _CreateIPKTaskScreenState();
 }
@@ -23,10 +25,11 @@ class _CreateIPKTaskScreenState extends State<CreateIPKTaskScreen> {
 
   final List<String> _taskTypes = ['Сборка', 'Монтаж', 'Пакетирование'];
 
+  // Публикуем в основные коллекции
   final Map<String, String> _collectionMap = {
-    'Сборка': 'IPKSborka',
-    'Монтаж': 'IPKMontasch',
-    'Пакетирование': 'IPKPacet'
+    'Сборка': 'Sborka',
+    'Монтаж': 'Montasch',
+    'Пакетирование': 'Pacet'
   };
 
   double getScaleFactor(BuildContext context) {
@@ -47,6 +50,24 @@ class _CreateIPKTaskScreenState extends State<CreateIPKTaskScreen> {
   void initState() {
     super.initState();
     _taskController.addListener(_updateCharacterCount);
+    _acceptArguments();
+  }
+
+  // Обработка аргументов: автозаполнение номера заказа и типа
+  void _acceptArguments() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+      if (args != null) {
+        final order = args['orderNumber'] as String?;
+        final spec = args['preselectedTaskType'] as String?;
+        if (order != null) _orderController.text = order;
+        if (spec != null && _taskTypes.contains(spec)) {
+          setState(() {
+            _selectedTaskType = spec;
+          });
+        }
+      }
+    });
   }
 
   void _updateCharacterCount() => setState(() {});
@@ -173,12 +194,15 @@ class _CreateIPKTaskScreenState extends State<CreateIPKTaskScreen> {
       CustomSnackBar.showWarning(context: context, message: 'Выберите тип задания');
       return;
     }
+
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) throw Exception('Пользователь не авторизован');
+
       final orderNumber = _orderController.text.trim();
       final taskDescription = _taskController.text.trim();
       final collectionName = _collectionMap[_selectedTaskType]!;
+
       final orderDoc = FirebaseFirestore.instance.collection(collectionName).doc(orderNumber);
       final orderSnapshot = await orderDoc.get();
       final now = DateTime.now().toIso8601String();
@@ -200,32 +224,35 @@ class _CreateIPKTaskScreenState extends State<CreateIPKTaskScreen> {
         'reviewedAt': null,
         'isIPK': true, // маркер ИПК
       };
+
       if (_base64Image != null) {
         newTask['imageBase64'] = _base64Image;
         newTask['hasImage'] = true;
       }
+
       if (orderSnapshot.exists) {
         final tasks = orderSnapshot.data()!['tasks'] as List;
         newTask['taskNumber'] = tasks.length + 1;
+
         await orderDoc.update({
           'tasks': FieldValue.arrayUnion([newTask]),
           'updatedAt': now,
+          'hasIPKTask': true, // ⚠️ ОТМЕЧАЕМ ЗАКАЗ КАК СОДЕРЖАЩИЙ ИПК
         });
       } else {
         await orderDoc.set({
           'orderNumber': orderNumber,
           'createdAt': now,
-          'tasks': [newTask]
+          'tasks': [newTask],
+          'hasIPKTask': true, // ⚠️ ОТМЕЧАЕМ ЗАКАЗ КАК СОДЕРЖАЩИЙ ИПК
         });
       }
+
       CustomSnackBar.showSuccess(context: context, message: 'Задание успешно опубликовано');
-      _orderController.clear();
-      _taskController.clear();
-      setState(() {
-        _selectedTaskType = null;
-        _selectedFile = null;
-        _base64Image = null;
-      });
+
+      // 🔴 ЗАКРЫВАЕМ ЭКРАН ПОСЛЕ УСПЕШНОЙ ПУБЛИКАЦИИ
+      Navigator.of(context).pop();
+
     } catch (e) {
       CustomSnackBar.showError(context: context, message: 'Ошибка публикации: $e');
     }

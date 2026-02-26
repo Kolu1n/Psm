@@ -6,7 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:psm/custom_snackbar.dart';
 
-/// ИТМ выполняет ИПК-задание (только фото + статус «completed»)
+/// ИТР выполняет ИПК-задание (только фото + статус «completed»)
 class IPKWorkerTaskScreen extends StatefulWidget {
   final String orderNumber;
   final String collectionName;
@@ -100,7 +100,7 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
         'status': 'completed',
         'resultImageBase64': _base64Image,
         'completedBy': user?.uid,
-        'completedByName': user?.displayName ?? 'ИТМ',
+        'completedByName': user?.displayName ?? 'ИТР',
         'completedAt': DateTime.now().toIso8601String(),
         'hasResultImage': true,
         'reviewedBy': null,
@@ -409,7 +409,7 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
                         height: 45 * scale,
                         margin: EdgeInsets.symmetric(horizontal: 20 * scale),
                         child: ElevatedButton(
-                          onPressed: () => _showSourceDialog(),
+                          onPressed: _showSourceDialog,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.red,
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15 * scale)),

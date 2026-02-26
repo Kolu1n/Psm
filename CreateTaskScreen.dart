@@ -1,4 +1,3 @@
-// CreateTaskScreen.dart
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
@@ -8,6 +7,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:psm/custom_snackbar.dart';
 
 class CreateTaskScreen extends StatefulWidget {
+  const CreateTaskScreen({Key? key}) : super(key: key);
+
   @override
   _CreateTaskScreenState createState() => _CreateTaskScreenState();
 }
@@ -19,7 +20,7 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
 
   String? _selectedTaskType;
   File? _selectedFile;
-  dynamic? _base64Image;
+  String? _base64Image;
   final ImagePicker _picker = ImagePicker();
 
   final List<String> _taskTypes = ['Сборка', 'Монтаж', 'Пакетирование'];
@@ -51,11 +52,26 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
   void initState() {
     super.initState();
     _taskController.addListener(_updateCharacterCount);
+    _acceptArguments();
   }
 
-  void _updateCharacterCount() {
-    setState(() {});
+  void _acceptArguments() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+      if (args != null) {
+        final order = args['orderNumber'] as String?;
+        final spec = args['preselectedTaskType'] as String?;
+        if (order != null) _orderController.text = order;
+        if (spec != null && _taskTypes.contains(spec)) {
+          setState(() {
+            _selectedTaskType = spec;
+          });
+        }
+      }
+    });
   }
+
+  void _updateCharacterCount() => setState(() {});
 
   Future<void> _showImageSourceDialog() async {
     final scale = getScaleFactor(context);
@@ -309,14 +325,8 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
         message: 'Задание успешно опубликовано',
       );
 
-      _orderController.clear();
-      _taskController.clear();
-      setState(() {
-        _selectedTaskType = null;
-        _selectedFile = null;
-        _base64Image = null;
-      });
-
+      // 🔴 АВТОЗАКРЫТИЕ ЭКРАНА
+      Navigator.of(context).pop();
     } catch (e) {
       CustomSnackBar.showError(
         context: context,
@@ -380,7 +390,7 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
                 borderRadius: BorderRadius.circular(10 * scale),
               ),
               child: Image.memory(
-                base64.decode(_base64Image!),
+                base64Decode(_base64Image!),
                 fit: BoxFit.cover,
                 errorBuilder: (context, error, stackTrace) {
                   return Center(
@@ -623,14 +633,8 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
                           alignment: Alignment.centerRight,
                           child: Padding(
                             padding: EdgeInsets.only(top: 5 * scale),
-                            child: Text(
-                              '${_taskController.text.length} символов',
-                              style: TextStyle(
-                                fontSize: 12 * scale,
-                                fontFamily: 'GolosR',
-                                color: Colors.red,
-                              ),
-                            ),
+                            child: Text('${_taskController.text.length} символов',
+                                style: TextStyle(fontSize: 12 * scale, fontFamily: 'GolosR', color: Colors.red)),
                           ),
                         ),
 

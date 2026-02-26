@@ -15,7 +15,9 @@ class _SendPushScreenState extends State<SendPushScreen> {
   bool _sborkaSelected = false;
   bool _pacetSelected = false;
   bool _isLoading = false;
-  String _userName = 'ИТМ';
+  String _userName = 'ИПК';
+  String? _currentUserId;
+  int _userSpec = 0;
 
   double getScaleFactor(BuildContext context) {
     final diagonal = MediaQuery.of(context).size.shortestSide;
@@ -34,134 +36,201 @@ class _SendPushScreenState extends State<SendPushScreen> {
   @override
   void initState() {
     super.initState();
-    _loadUserName();
+    _loadUserData();
   }
 
-  Future<void> _loadUserName() async {
+  Future<void> _loadUserData() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
+      setState(() {
+        _currentUserId = user.uid;
+      });
       final userDoc = await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
           .get();
       if (userDoc.exists) {
+        final spec = userDoc.data()?['specialization'] ?? 0;
         setState(() {
-          _userName = userDoc.data()?['displayName'] ?? 'ИТМ';
+          _userSpec = spec;
+          // 🔴 ИСПРАВЛЕНО: ИТР (4) = "ИТР", ИПК (5) = "ИПК"
+          if (spec == 4) {
+            _userName = 'ИТР';
+          } else if (spec == 5) {
+            _userName = 'ИПК';
+          } else {
+            _userName = userDoc.data()?['displayName'] ?? 'Пользователь';
+          }
         });
       }
     }
   }
 
-  // 🔴 НОВЫЙ МЕТОД: Получаем детальную статистику по заказам
+  // Получаем статистику заданий
   Future<Map<String, Map<String, List<Map<String, dynamic>>>>> _getDetailedStatistics() async {
     Map<String, Map<String, List<Map<String, dynamic>>>> stats = {
-      'Montasch': {},  // orderNumber -> tasks
+      'Montasch': {},
       'Sborka': {},
       'Pacet': {},
     };
 
     try {
-      // 🔴 СТАТИСТИКА ПО МОНТАЖУ
-      final montaschSnapshot = await FirebaseFirestore.instance
-          .collection('Montasch')
-          .get();
+      final bool isIPK = _userSpec == 5;
 
-      for (var doc in montaschSnapshot.docs) {
-        final orderData = doc.data();
-        final orderNumber = orderData['orderNumber']?.toString() ?? 'Без номера';
-        final tasks = orderData['tasks'] as List? ?? [];
+      // Статистика по монтажу
+      if (_montaschSelected) {
+        final montaschSnapshot = await FirebaseFirestore.instance
+            .collection('Montasch')
+            .get();
 
-        final notCompletedTasks = tasks.where((task) => task['status'] == 'active').toList();
+        for (var doc in montaschSnapshot.docs) {
+          final orderData = doc.data();
+          final orderNumber = orderData['orderNumber']?.toString() ?? 'Без номера';
+          final tasks = orderData['tasks'] as List? ?? [];
 
-        if (notCompletedTasks.isNotEmpty) {
-          stats['Montasch']![orderNumber] = notCompletedTasks.map((task) {
-            return {
-              'taskNumber': task['taskNumber'] ?? 0,
-              'description': task['taskDescription']?.toString() ?? 'Без описания',
-            };
+          final filteredTasks = tasks.where((task) {
+            final bool taskIsIPK = task['isIPK'] == true;
+            final String status = task['status'] ?? 'active';
+            final String? createdBy = task['createdBy'];
+
+            if (isIPK) {
+              return taskIsIPK && createdBy == _currentUserId && (status == 'active' || status == 'completed');
+            }
+            return !taskIsIPK && (status == 'active');
           }).toList();
+
+          if (filteredTasks.isNotEmpty) {
+            stats['Montasch']![orderNumber] = filteredTasks.map((task) {
+              return {
+                'taskNumber': task['taskNumber'] ?? 0,
+                'description': task['taskDescription']?.toString() ?? 'Без описания',
+                'isIPK': task['isIPK'] == true,
+                'createdBy': task['createdBy'] ?? '',
+              };
+            }).toList();
+          }
         }
       }
 
-      // 🔴 СТАТИСТИКА ПО СБОРКЕ
-      final sborkaSnapshot = await FirebaseFirestore.instance
-          .collection('Sborka')
-          .get();
+      // Статистика по сборке
+      if (_sborkaSelected) {
+        final sborkaSnapshot = await FirebaseFirestore.instance
+            .collection('Sborka')
+            .get();
 
-      for (var doc in sborkaSnapshot.docs) {
-        final orderData = doc.data();
-        final orderNumber = orderData['orderNumber']?.toString() ?? 'Без номера';
-        final tasks = orderData['tasks'] as List? ?? [];
+        for (var doc in sborkaSnapshot.docs) {
+          final orderData = doc.data();
+          final orderNumber = orderData['orderNumber']?.toString() ?? 'Без номера';
+          final tasks = orderData['tasks'] as List? ?? [];
 
-        final notCompletedTasks = tasks.where((task) => task['status'] == 'active').toList();
+          final filteredTasks = tasks.where((task) {
+            final bool taskIsIPK = task['isIPK'] == true;
+            final String status = task['status'] ?? 'active';
+            final String? createdBy = task['createdBy'];
 
-        if (notCompletedTasks.isNotEmpty) {
-          stats['Sborka']![orderNumber] = notCompletedTasks.map((task) {
-            return {
-              'taskNumber': task['taskNumber'] ?? 0,
-              'description': task['taskDescription']?.toString() ?? 'Без описания',
-            };
+            if (isIPK) {
+              return taskIsIPK && createdBy == _currentUserId && (status == 'active' || status == 'completed');
+            }
+            return !taskIsIPK && (status == 'active');
           }).toList();
+
+          if (filteredTasks.isNotEmpty) {
+            stats['Sborka']![orderNumber] = filteredTasks.map((task) {
+              return {
+                'taskNumber': task['taskNumber'] ?? 0,
+                'description': task['taskDescription']?.toString() ?? 'Без описания',
+                'isIPK': task['isIPK'] == true,
+                'createdBy': task['createdBy'] ?? '',
+              };
+            }).toList();
+          }
         }
       }
 
-      // 🔴 СТАТИСТИКА ПО ПАКЕТИРОВАНИЮ
-      final pacetSnapshot = await FirebaseFirestore.instance
-          .collection('Pacet')
-          .get();
+      // Статистика по пакетированию
+      if (_pacetSelected) {
+        final pacetSnapshot = await FirebaseFirestore.instance
+            .collection('Pacet')
+            .get();
 
-      for (var doc in pacetSnapshot.docs) {
-        final orderData = doc.data();
-        final orderNumber = orderData['orderNumber']?.toString() ?? 'Без номера';
-        final tasks = orderData['tasks'] as List? ?? [];
+        for (var doc in pacetSnapshot.docs) {
+          final orderData = doc.data();
+          final orderNumber = orderData['orderNumber']?.toString() ?? 'Без номера';
+          final tasks = orderData['tasks'] as List? ?? [];
 
-        final notCompletedTasks = tasks.where((task) => task['status'] == 'active').toList();
+          final filteredTasks = tasks.where((task) {
+            final bool taskIsIPK = task['isIPK'] == true;
+            final String status = task['status'] ?? 'active';
+            final String? createdBy = task['createdBy'];
 
-        if (notCompletedTasks.isNotEmpty) {
-          stats['Pacet']![orderNumber] = notCompletedTasks.map((task) {
-            return {
-              'taskNumber': task['taskNumber'] ?? 0,
-              'description': task['taskDescription']?.toString() ?? 'Без описания',
-            };
+            if (isIPK) {
+              return taskIsIPK && createdBy == _currentUserId && (status == 'active' || status == 'completed');
+            }
+            return !taskIsIPK && (status == 'active');
           }).toList();
+
+          if (filteredTasks.isNotEmpty) {
+            stats['Pacet']![orderNumber] = filteredTasks.map((task) {
+              return {
+                'taskNumber': task['taskNumber'] ?? 0,
+                'description': task['taskDescription']?.toString() ?? 'Без описания',
+                'isIPK': task['isIPK'] == true,
+                'createdBy': task['createdBy'] ?? '',
+              };
+            }).toList();
+          }
         }
       }
 
-      print('📊 Детальная статистика собрана:');
+      print('📊 Статистика собрана для $_userName:');
       for (var collection in stats.keys) {
         final orders = stats[collection]!;
         if (orders.isNotEmpty) {
-          print('   $collection: ${orders.length} заказов с невыполненными заданиями');
+          print('   $collection: ${orders.length} заказов');
           for (var orderNumber in orders.keys) {
-            print('      Заказ $orderNumber: ${orders[orderNumber]!.length} заданий');
+            final ipkCount = orders[orderNumber]!.where((t) => t['isIPK'] == true).length;
+            print('      Заказ $orderNumber: ${orders[orderNumber]!.length} заданий (ИПК: $ipkCount)');
           }
         }
       }
 
     } catch (e) {
-      print('❌ Ошибка получения детальной статистики: $e');
+      print('❌ Ошибка получения статистики: $e');
     }
 
     return stats;
   }
 
-  // 🔴 ФОРМИРУЕМ СООБЩЕНИЕ В НУЖНОМ ФОРМАТЕ
-  String _formatMessage(String specialization, Map<String, List<Map<String, dynamic>>> orders) {
-    if (orders.isEmpty) {
-      return '';
-    }
+  // Формируем сообщение
+  String _formatMessage(
+      String specialization,
+      Map<String, List<Map<String, dynamic>>> orders,
+      ) {
+    if (orders.isEmpty) return '';
 
     String message = '$_userName напоминает $specialization:\n';
 
     for (var orderNumber in orders.keys) {
       final tasks = orders[orderNumber]!;
-      message += 'Заказ "$orderNumber" - ${tasks.length} не выполненных заданий\n';
+      final int taskCount = tasks.length;
+      final int ipkCount = tasks.where((t) => t['isIPK'] == true).length;
+      final int regularCount = taskCount - ipkCount;
+
+      String taskInfo = '';
+      if (ipkCount > 0 && regularCount > 0) {
+        taskInfo = '$taskCount заданий (ИПК: $ipkCount, Обычных: $regularCount)';
+      } else if (ipkCount > 0) {
+        taskInfo = '$ipkCount ИПК-заданий';
+      } else {
+        taskInfo = '$taskCount заданий';
+      }
+
+      message += 'Заказ "$orderNumber" — $taskInfo\n';
     }
 
     return message.trim();
   }
 
-  // 🔴 ПОЛУЧАЕМ НАЗВАНИЕ СПЕЦИАЛИЗАЦИИ
   String _getSpecializationName(int specializationCode) {
     switch (specializationCode) {
       case 1: return 'сборщикам';
@@ -185,23 +254,33 @@ class _SendPushScreenState extends State<SendPushScreen> {
     });
 
     try {
-      // 🔴 ПОЛУЧАЕМ ДЕТАЛЬНУЮ СТАТИСТИКУ
       final detailedStats = await _getDetailedStatistics();
 
-      // 🔴 ДЛЯ МОНТАЖНИКОВ
-      if (_montaschSelected) {
-        final montaschOrders = detailedStats['Montasch']!;
-        if (montaschOrders.isNotEmpty) {
-          final tokens = await FCMService.getTokensBySpecialization(2); // 2 = Монтажник
-          if (tokens.isNotEmpty) {
-            String message = _formatMessage('монтажникам', montaschOrders);
+      final bool hasMontasch = detailedStats['Montasch']!.isNotEmpty;
+      final bool hasSborka = detailedStats['Sborka']!.isNotEmpty;
+      final bool hasPacet = detailedStats['Pacet']!.isNotEmpty;
 
+      if (!hasMontasch && !hasSborka && !hasPacet) {
+        CustomSnackBar.showWarning(
+          context: context,
+          message: 'Нет заданий для отправки напоминаний',
+        );
+        setState(() => _isLoading = false);
+        return;
+      }
+
+      // Монтажники
+      if (_montaschSelected && hasMontasch) {
+        final tokens = await FCMService.getTokensBySpecialization(2);
+        if (tokens.isNotEmpty) {
+          String message = _formatMessage('монтажникам', detailedStats['Montasch']!);
+          if (message.isNotEmpty) {
             await FCMService.sendPushNotification(
               tokens: tokens,
-              title: 'Напоминание от ИТМ',
+              title: 'Напоминание от $_userName',
               body: message,
               data: {
-                'type': 'manager_notification',
+                'type': _userSpec == 5 ? 'ipk_notification' : 'manager_notification',
                 'sender': _userName,
                 'specialization': 'montasch',
                 'timestamp': DateTime.now().toIso8601String(),
@@ -211,20 +290,18 @@ class _SendPushScreenState extends State<SendPushScreen> {
         }
       }
 
-      // 🔴 ДЛЯ СБОРЩИКОВ
-      if (_sborkaSelected) {
-        final sborkaOrders = detailedStats['Sborka']!;
-        if (sborkaOrders.isNotEmpty) {
-          final tokens = await FCMService.getTokensBySpecialization(1); // 1 = Сборщик
-          if (tokens.isNotEmpty) {
-            String message = _formatMessage('сборщикам', sborkaOrders);
-
+      // Сборщики
+      if (_sborkaSelected && hasSborka) {
+        final tokens = await FCMService.getTokensBySpecialization(1);
+        if (tokens.isNotEmpty) {
+          String message = _formatMessage('сборщикам', detailedStats['Sborka']!);
+          if (message.isNotEmpty) {
             await FCMService.sendPushNotification(
               tokens: tokens,
-              title: 'Напоминание от ИТМ',
+              title: 'Напоминание от $_userName',
               body: message,
               data: {
-                'type': 'manager_notification',
+                'type': _userSpec == 5 ? 'ipk_notification' : 'manager_notification',
                 'sender': _userName,
                 'specialization': 'sborka',
                 'timestamp': DateTime.now().toIso8601String(),
@@ -234,20 +311,18 @@ class _SendPushScreenState extends State<SendPushScreen> {
         }
       }
 
-      // 🔴 ДЛЯ ПАКЕТИРОВЩИКОВ
-      if (_pacetSelected) {
-        final pacetOrders = detailedStats['Pacet']!;
-        if (pacetOrders.isNotEmpty) {
-          final tokens = await FCMService.getTokensBySpecialization(3); // 3 = Пакетировщик
-          if (tokens.isNotEmpty) {
-            String message = _formatMessage('пакетировщикам', pacetOrders);
-
+      // Пакетировщики
+      if (_pacetSelected && hasPacet) {
+        final tokens = await FCMService.getTokensBySpecialization(3);
+        if (tokens.isNotEmpty) {
+          String message = _formatMessage('пакетировщикам', detailedStats['Pacet']!);
+          if (message.isNotEmpty) {
             await FCMService.sendPushNotification(
               tokens: tokens,
-              title: 'Напоминание от ИТМ',
+              title: 'Напоминание от $_userName',
               body: message,
               data: {
-                'type': 'manager_notification',
+                'type': _userSpec == 5 ? 'ipk_notification' : 'manager_notification',
                 'sender': _userName,
                 'specialization': 'pacet',
                 'timestamp': DateTime.now().toIso8601String(),
@@ -257,7 +332,6 @@ class _SendPushScreenState extends State<SendPushScreen> {
         }
       }
 
-      // Сохраняем историю отправки
       await _saveNotificationHistory(detailedStats);
 
       CustomSnackBar.showSuccess(
@@ -280,43 +354,41 @@ class _SendPushScreenState extends State<SendPushScreen> {
     }
   }
 
-  // 🔴 СОХРАНЕНИЕ ИСТОРИИ С ДЕТАЛЬНОЙ СТАТИСТИКОЙ
   Future<void> _saveNotificationHistory(Map<String, Map<String, List<Map<String, dynamic>>>> stats) async {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
-
         String fullMessage = '$_userName отправил напоминания:\n\n';
 
-        // Монтаж
         if (_montaschSelected && stats['Montasch']!.isNotEmpty) {
           fullMessage += 'Монтажникам:\n';
           final montaschOrders = stats['Montasch']!;
           for (var orderNumber in montaschOrders.keys) {
             final tasks = montaschOrders[orderNumber]!;
-            fullMessage += '  Заказ "$orderNumber" - ${tasks.length} не выполненных заданий\n';
+            final ipkCount = tasks.where((t) => t['isIPK'] == true).length;
+            fullMessage += '  Заказ "$orderNumber" - ${tasks.length} заданий (ИПК: $ipkCount)\n';
           }
           fullMessage += '\n';
         }
 
-        // Сборка
         if (_sborkaSelected && stats['Sborka']!.isNotEmpty) {
           fullMessage += 'Сборщикам:\n';
           final sborkaOrders = stats['Sborka']!;
           for (var orderNumber in sborkaOrders.keys) {
             final tasks = sborkaOrders[orderNumber]!;
-            fullMessage += '  Заказ "$orderNumber" - ${tasks.length} не выполненных заданий\n';
+            final ipkCount = tasks.where((t) => t['isIPK'] == true).length;
+            fullMessage += '  Заказ "$orderNumber" - ${tasks.length} заданий (ИПК: $ipkCount)\n';
           }
           fullMessage += '\n';
         }
 
-        // Пакетирование
         if (_pacetSelected && stats['Pacet']!.isNotEmpty) {
           fullMessage += 'Пакетировщикам:\n';
           final pacetOrders = stats['Pacet']!;
           for (var orderNumber in pacetOrders.keys) {
             final tasks = pacetOrders[orderNumber]!;
-            fullMessage += '  Заказ "$orderNumber" - ${tasks.length} не выполненных заданий\n';
+            final ipkCount = tasks.where((t) => t['isIPK'] == true).length;
+            fullMessage += '  Заказ "$orderNumber" - ${tasks.length} заданий (ИПК: $ipkCount)\n';
           }
         }
 
@@ -325,35 +397,39 @@ class _SendPushScreenState extends State<SendPushScreen> {
             .add({
           'senderId': user.uid,
           'senderName': _userName,
+          'senderSpecialization': _userSpec,
           'message': fullMessage,
           'montaschSelected': _montaschSelected,
           'sborkaSelected': _sborkaSelected,
           'pacetSelected': _pacetSelected,
           'sentAt': DateTime.now().toIso8601String(),
           'timestamp': FieldValue.serverTimestamp(),
+          'isIPK': _userSpec == 5,
           'stats': {
             'Montasch': _formatStatsForFirestore(stats['Montasch']!),
             'Sborka': _formatStatsForFirestore(stats['Sborka']!),
             'Pacet': _formatStatsForFirestore(stats['Pacet']!),
           },
         });
-        print('✅ История уведомления сохранена с детальной статистикой');
+        print('✅ История уведомления сохранена');
       }
     } catch (e) {
       print('❌ Ошибка сохранения истории: $e');
     }
   }
 
-  // 🔴 ФОРМАТИРУЕМ СТАТИСТИКУ ДЛЯ FIRESTORE
   Map<String, dynamic> _formatStatsForFirestore(Map<String, List<Map<String, dynamic>>> orders) {
     Map<String, dynamic> result = {};
 
     for (var orderNumber in orders.keys) {
+      final tasks = orders[orderNumber]!;
       result[orderNumber] = {
-        'count': orders[orderNumber]!.length,
-        'tasks': orders[orderNumber]!.map((task) => {
+        'count': tasks.length,
+        'ipkCount': tasks.where((t) => t['isIPK'] == true).length,
+        'tasks': tasks.map((task) => {
           'taskNumber': task['taskNumber'],
           'description': task['description'],
+          'isIPK': task['isIPK'] ?? false,
         }).toList(),
       };
     }
@@ -418,6 +494,7 @@ class _SendPushScreenState extends State<SendPushScreen> {
   @override
   Widget build(BuildContext context) {
     final scale = getScaleFactor(context);
+    final bool isIPK = _userSpec == 5;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -437,7 +514,7 @@ class _SendPushScreenState extends State<SendPushScreen> {
           children: [
             AppBar(
               title: Text(
-                'Отправить напоминание',
+                isIPK ? 'Отправить напоминание (ИПК)' : 'Отправить напоминание',
                 style: TextStyle(
                   fontFamily: 'GolosB',
                   fontSize: 18 * scale,
@@ -446,7 +523,7 @@ class _SendPushScreenState extends State<SendPushScreen> {
               ),
               backgroundColor: Colors.transparent,
               elevation: 0,
-              iconTheme: IconThemeData(color: Colors.blue),
+              iconTheme: IconThemeData(color: Colors.red),
               centerTitle: true,
             ),
             Expanded(
@@ -459,25 +536,27 @@ class _SendPushScreenState extends State<SendPushScreen> {
                       margin: EdgeInsets.only(bottom: 20 * scale),
                       padding: EdgeInsets.all(15 * scale),
                       decoration: BoxDecoration(
-                        color: Colors.blue.withOpacity(0.1),
+                        color: isIPK ? Colors.red.withOpacity(0.1) : Colors.blue.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(15 * scale),
-                        border: Border.all(color: Colors.blue),
+                        border: Border.all(color: isIPK ? Colors.red : Colors.blue),
                       ),
                       child: Row(
                         children: [
                           Icon(
                             Icons.notifications_active,
-                            color: Colors.blue,
+                            color: isIPK ? Colors.red : Colors.blue,
                             size: 24 * scale,
                           ),
                           SizedBox(width: 10 * scale),
                           Expanded(
                             child: Text(
-                              'Отправьте напоминание работникам о невыполненных заданиях',
+                              isIPK
+                                  ? 'Отправьте напоминание работникам о невыполненных ИПК-заданиях'
+                                  : 'Отправьте напоминание работникам о невыполненных заданиях',
                               style: TextStyle(
                                 fontFamily: 'GolosR',
                                 fontSize: 14 * scale,
-                                color: Colors.blue[800],
+                                color: isIPK ? Colors.red[800] : Colors.blue[800],
                               ),
                             ),
                           ),
@@ -551,14 +630,19 @@ class _SendPushScreenState extends State<SendPushScreen> {
                                   'Пример:',
                                   style: TextStyle(
                                     fontFamily: 'GolosB',
-                                    color: Colors.blue,
+                                    color: isIPK ? Colors.red : Colors.red,
                                     fontSize: 14 * scale,
                                   ),
                                 ),
                                 SizedBox(height: 5 * scale),
+                                // 🔴 ИСПРАВЛЕНО: пример показывает правильную роль
                                 Text(
-                                  'Владимир напоминает сборщикам:\n'
-                                      'Заказ "12345" - 3 не выполненных заданий\n'
+                                  isIPK
+                                      ? 'Иван ИПК напоминает сборщикам:\n'
+                                      'Заказ "12345" - 3 ИПК-заданий\n'
+                                      'Заказ "67890" - 1 ИПК-задание'
+                                      : 'Иван ИТР напоминает сборщикам:\n'
+                                      'Заказ "12345" - 3 не выполненных заданий (ИПК: 1)\n'
                                       'Заказ "67890" - 1 не выполненное задание',
                                   style: TextStyle(
                                     fontFamily: 'GolosR',
@@ -572,11 +656,13 @@ class _SendPushScreenState extends State<SendPushScreen> {
                           ),
                           SizedBox(height: 10 * scale),
                           Text(
-                            '📱 Уведомление будет отправлено на устройства работников',
+                            isIPK
+                                ? '📱 Уведомление будет отправлено только о ваших ИПК-заданиях'
+                                : '📱 Уведомление будет отправлено на устройства работников',
                             style: TextStyle(
                               fontFamily: 'GolosR',
                               fontSize: 12 * scale,
-                              color: Colors.blue,
+                              color: isIPK ? Colors.red : Colors.red,
                             ),
                           ),
                         ],
@@ -618,7 +704,7 @@ class _SendPushScreenState extends State<SendPushScreen> {
                             child: ElevatedButton(
                               onPressed: _isLoading ? null : _sendPushNotifications,
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blue,
+                                backgroundColor: isIPK ? Colors.red : Colors.red,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(15 * scale),
                                 ),
@@ -649,7 +735,7 @@ class _SendPushScreenState extends State<SendPushScreen> {
                             CircularProgressIndicator(),
                             SizedBox(height: 10 * scale),
                             Text(
-                              'Отправка напоминаний...',
+                              isIPK ? 'Отправка напоминаний ИПК...' : 'Отправка напоминаний...',
                               style: TextStyle(
                                 fontSize: 14 * scale,
                                 fontFamily: 'GolosR',

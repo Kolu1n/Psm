@@ -1,7 +1,10 @@
+// TasksScreen.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:psm/custom_snackbar.dart';
+import 'package:psm/pages/CreateTaskScreen.dart';
+import 'package:psm/pages/create_ipk_task_screen.dart';
 
 class TasksScreen extends StatefulWidget {
   final String orderNumber;
@@ -21,6 +24,7 @@ class TasksScreen extends StatefulWidget {
 
 class _TasksScreenState extends State<TasksScreen> {
   int? userSpec;
+  bool isLoadingUserSpec = true;
   Map<String, String> userNames = {};
 
   double getScaleFactor(BuildContext context) {
@@ -50,9 +54,15 @@ class _TasksScreenState extends State<TasksScreen> {
       if (doc.exists) {
         setState(() {
           userSpec = doc.data()?['specialization'] ?? 0;
+          isLoadingUserSpec = false;
         });
+        return;
       }
     }
+    setState(() {
+      userSpec = 0;
+      isLoadingUserSpec = false;
+    });
   }
 
   Future<String> _getUserName(String uid) async {
@@ -143,7 +153,25 @@ class _TasksScreenState extends State<TasksScreen> {
         ],
       ),
     );
-    if (yes == true) await _deleteTask(taskIndex, taskNumber);
+    if (yes == true) {
+      // Проверка перед удалением
+      final bool isIPK = task['isIPK'] == true;
+      final String status = task['status'] ?? 'active';
+
+      // ✅ ИПК может удалять свои задания, даже если они выполнены
+      if (isIPK && userSpec != 5) {
+        CustomSnackBar.showWarning(context: context, message: 'ИПК-задания нельзя удалять');
+        return;
+      }
+
+      // ✅ ИПК может удалять выполненные задания, ИТР - нет
+      if ((status == 'completed' || status == 'approved') && !(isIPK && userSpec == 5)) {
+        CustomSnackBar.showWarning(context: context, message: 'Нельзя удалить завершенное задание');
+        return;
+      }
+
+      await _deleteTask(taskIndex, taskNumber);
+    }
   }
 
   Future<void> _deleteTask(int taskIndex, int taskNumber) async {
@@ -155,8 +183,17 @@ class _TasksScreenState extends State<TasksScreen> {
       if (taskIndex >= tasks.length) throw Exception('Задание не найдено');
 
       final bool isIPK = tasks[taskIndex]['isIPK'] == true;
+      final String status = tasks[taskIndex]['status'] ?? 'active';
+
+      // ✅ ИПК может удалять свои задания, даже если они выполнены
       if (isIPK && userSpec != 5) {
         CustomSnackBar.showWarning(context: context, message: 'ИПК-задания нельзя удалять');
+        return;
+      }
+
+      // ✅ ИПК может удалять выполненные задания, ИТР - нет
+      if ((status == 'completed' || status == 'approved') && !(isIPK && userSpec == 5)) {
+        CustomSnackBar.showWarning(context: context, message: 'Нельзя удалить завершенное задание');
         return;
       }
 
@@ -164,10 +201,16 @@ class _TasksScreenState extends State<TasksScreen> {
       for (int i = 0; i < tasks.length; i++) {
         tasks[i]['taskNumber'] = i + 1;
       }
+
+      // Проверяем, остались ли ИПК-задания
+      final bool stillHasIPK = tasks.any((t) => t['isIPK'] == true);
+
       await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).update({
         'tasks': tasks,
         'updatedAt': DateTime.now().toIso8601String(),
+        'hasIPKTask': stillHasIPK,
       });
+
       CustomSnackBar.showError(context: context, message: 'Задание №$taskNumber удалено');
       if (tasks.isEmpty) {
         await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).delete();
@@ -186,6 +229,7 @@ class _TasksScreenState extends State<TasksScreen> {
       'taskIndex': taskIndex,
       'task': task,
       'taskNumber': taskNumber,
+      'screenTitle': widget.screenTitle, // ✅ ДОБАВЛЕНО: передаем screenTitle
     });
   }
 
@@ -203,7 +247,7 @@ class _TasksScreenState extends State<TasksScreen> {
     final status = task['status'] ?? 'active';
     final bool isIPK = task['isIPK'] == true;
 
-    // ИТМ может выполнять ИПК-задания, но не проверять
+    // ИТР может выполнять ИПК-задания, но не проверять
     if (isIPK && userSpec == 4 && status == 'active') {
       Navigator.pushNamed(context, '/IPKWorkerTask', arguments: {
         'orderNumber': widget.orderNumber,
@@ -233,6 +277,28 @@ class _TasksScreenState extends State<TasksScreen> {
     }
   }
 
+  void _onAddTask() {
+    final bool isUserIPK = userSpec == 5;
+    final String spec = _detectSpecFromCollection(widget.collectionName);
+
+    final args = {
+      'orderNumber': widget.orderNumber,
+      'preselectedTaskType': spec,
+    };
+
+    final route = isUserIPK ? '/CreateIPKTask' : '/CreateTask';
+    Navigator.pushNamed(context, route, arguments: args).then((_) {
+      setState(() {});
+    });
+  }
+
+  String _detectSpecFromCollection(String col) {
+    if (col.contains('Sborka')) return 'Сборка';
+    if (col.contains('Montasch')) return 'Монтаж';
+    if (col.contains('Pacet')) return 'Пакетирование';
+    return 'Сборка';
+  }
+
   @override
   Widget build(BuildContext context) {
     final scale = getScaleFactor(context);
@@ -240,6 +306,18 @@ class _TasksScreenState extends State<TasksScreen> {
 
     return Scaffold(
       backgroundColor: Colors.white,
+      floatingActionButton: (userSpec == 4 || userSpec == 5)
+          ? FloatingActionButton(
+        heroTag: 'addTaskBtn',
+        onPressed: _onAddTask,
+        backgroundColor: Colors.red,
+        mini: true,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16 * scale),
+        ),
+        child: Icon(Icons.add, color: Colors.white, size: 28 * scale),
+      )
+          : null,
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -279,15 +357,27 @@ class _TasksScreenState extends State<TasksScreen> {
                   }
 
                   final orderData = snapshot.data!.data() as Map<String, dynamic>;
-                  List<dynamic> tasks = [];
+                  List<dynamic> allTasks = [];
                   try {
                     final tasksData = orderData['tasks'];
-                    if (tasksData is List) tasks = tasksData;
+                    if (tasksData is List) allTasks = tasksData;
                   } catch (_) {}
+
+                  if (isLoadingUserSpec) {
+                    return Center(child: CircularProgressIndicator(color: Colors.red));
+                  }
+
+                  final bool isIPKScreen = widget.screenTitle.contains('ИПК');
+                  final bool isUserIPK = userSpec == 5;
+
+                  final tasks = (isIPKScreen && isUserIPK)
+                      ? allTasks.where((t) => t['isIPK'] == true).toList()
+                      : allTasks;
 
                   if (tasks.isEmpty) {
                     return Center(
-                      child: Text('Заданий в этом заказе пока нет',
+                      child: Text(
+                          isUserIPK ? 'ИПК-заданий в этом заказе пока нет' : 'Заданий в этом заказе пока нет',
                           style: TextStyle(fontFamily: 'GolosR', fontSize: 18 * scale, color: Colors.grey)),
                     );
                   }
@@ -337,15 +427,22 @@ class _TasksScreenState extends State<TasksScreen> {
                               final task = tasks[index] is Map<String, dynamic>
                                   ? tasks[index] as Map<String, dynamic>
                                   : Map<String, dynamic>.from(tasks[index] ?? {});
-                              final taskNumber = task['taskNumber'] ?? index + 1;
+
+                              final bool isUserIPK = userSpec == 5;
+                              final bool isIPKScreen = widget.screenTitle.contains('ИПК');
+                              final displayTaskNumber = (isUserIPK && isIPKScreen) ? index + 1 : (task['taskNumber'] ?? index + 1);
+
                               final hasImage = task['imageBase64'] != null && task['imageBase64'].isNotEmpty;
                               final hasResultImage = task['resultImageBase64'] != null && task['resultImageBase64'].isNotEmpty;
                               final status = task['status'] ?? 'active';
                               final taskDescription = task['taskDescription']?.toString() ?? '';
                               final bool isIPK = task['isIPK'] == true;
 
+                              // ✅ ИПК может удалять свои выполненные задания
+                              final bool canDelete = (userSpec == 4 && !isIPK) || (userSpec == 5 && isIPK);
+
                               return GestureDetector(
-                                onTap: () => _handleTaskTap(task, taskNumber, index),
+                                onTap: () => _handleTaskTap(task, displayTaskNumber, index),
                                 child: Card(
                                   margin: EdgeInsets.only(bottom: 15 * scale),
                                   shape: RoundedRectangleBorder(
@@ -365,7 +462,7 @@ class _TasksScreenState extends State<TasksScreen> {
                                             borderRadius: BorderRadius.circular(10 * scale),
                                           ),
                                           child: Center(
-                                            child: Text('$taskNumber',
+                                            child: Text('$displayTaskNumber',
                                                 style: TextStyle(
                                                     color: Colors.white,
                                                     fontFamily: 'GolosB',
@@ -384,7 +481,7 @@ class _TasksScreenState extends State<TasksScreen> {
                                                           fontFamily: 'GolosB',
                                                           fontSize: 18 * scale,
                                                           color: Colors.black87)),
-                                                  Text('№$taskNumber',
+                                                  Text('№$displayTaskNumber',
                                                       style: TextStyle(
                                                           fontFamily: 'GolosB',
                                                           fontSize: 18 * scale,
@@ -451,8 +548,6 @@ class _TasksScreenState extends State<TasksScreen> {
                                                 ),
                                               ],
                                               SizedBox(height: 8 * scale),
-
-                                              // ✅ СТАТУС + ИПК-ЗНАЧОК
                                               Row(
                                                 children: [
                                                   Container(
@@ -480,8 +575,6 @@ class _TasksScreenState extends State<TasksScreen> {
                                                       ],
                                                     ),
                                                   ),
-
-                                                  // ✅ ИПК-ЗНАЧОК
                                                   if (isIPK) ...[
                                                     SizedBox(width: 8 * scale),
                                                     Container(
@@ -509,12 +602,10 @@ class _TasksScreenState extends State<TasksScreen> {
                                             ],
                                           ),
                                         ),
-
-                                        // Кнопка удаления (только ИТМ/ИПК)
-                                        if (userSpec == 4 || userSpec == 5) ...[
+                                        if (canDelete) ...[
                                           SizedBox(width: 10 * scale),
                                           GestureDetector(
-                                            onTap: () => _confirmDeleteTask(index, task, taskNumber),
+                                            onTap: () => _confirmDeleteTask(index, task, displayTaskNumber),
                                             child: Container(
                                               width: 40 * scale,
                                               height: 40 * scale,

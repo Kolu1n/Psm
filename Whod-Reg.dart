@@ -1,505 +1,711 @@
-// Whod-Reg.dart
-import 'package:email_validator/Email_validator.dart';
+import 'package:email_validator/email_validator.dart';
 import 'package:flutter/material.dart';
-import 'package:psm/pages/Sett.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:psm/custom_snackbar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-
-TextEditingController emailController = TextEditingController();
-TextEditingController passwordController = TextEditingController();
-final GlobalKey<ScaffoldMessengerState> _scaffoldKey = GlobalKey<ScaffoldMessengerState>();
-final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+import 'package:psm/custom_snackbar.dart';
 
 class Whod extends StatefulWidget {
+  const Whod({Key? key}) : super(key: key);
+
   @override
-  _WhodState createState() => _WhodState();
+  State<Whod> createState() => _WhodState();
 }
 
-class _WhodState extends State<Whod> {
-  int theme = 0;
+class _WhodState extends State<Whod> with TickerProviderStateMixin {
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+
   bool _isLoading = false;
   bool _isPasswordVisible = false;
+  bool _rememberMe = false;
 
-  double getScaleFactor(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    final height = MediaQuery.of(context).size.height;
-    final diagonal = MediaQuery.of(context).size.shortestSide;
+  late AnimationController _animationController;
+  late Animation<double> _fadeIn;
+  late Animation<Offset> _slideUp;
 
-    if (diagonal < 300) return 0.65;
-    if (diagonal < 350) return 0.75;
-    if (diagonal < 400) return 0.85;
-    if (diagonal < 450) return 0.9;
-    if (diagonal < 500) return 0.95;
-    if (diagonal < 600) return 1.0;
-    if (diagonal < 700) return 1.1;
-    if (diagonal < 800) return 1.2;
-    if (diagonal < 1000) return 1.3;
-    return 1.4;
+  // Фокус ноды для анимации полей
+  final FocusNode _emailFocus = FocusNode();
+  final FocusNode _passwordFocus = FocusNode();
+  bool _emailFocused = false;
+  bool _passwordFocused = false;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _animationController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    );
+
+    _fadeIn = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
+    );
+
+    _slideUp = Tween<Offset>(begin: const Offset(0, 0.2), end: Offset.zero).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOutCubic),
+    );
+
+    // Слушатели фокуса
+    _emailFocus.addListener(() {
+      setState(() => _emailFocused = _emailFocus.hasFocus);
+    });
+    _passwordFocus.addListener(() {
+      setState(() => _passwordFocused = _passwordFocus.hasFocus);
+    });
+
+    Future.delayed(const Duration(milliseconds: 100), () {
+      _animationController.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _animationController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    _emailFocus.dispose();
+    _passwordFocus.dispose();
+    super.dispose();
+  }
+
+  Future<void> _login() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() => _isLoading = true);
+    HapticFeedback.mediumImpact();
+
+    try {
+      final userCredential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+      );
+
+      // Сохраняем состояние
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('isLoggedIn', true);
+      await prefs.setBool('rememberMe', _rememberMe);
+
+      // FCM токен
+      await _saveFCMToken(userCredential.user!.uid);
+
+      // Проверка специализации
+      await _checkUserSpecialization();
+
+    } on FirebaseAuthException catch (e) {
+      String message;
+      switch (e.code) {
+        case 'user-not-found':
+          message = 'Пользователь не найден';
+          break;
+        case 'wrong-password':
+          message = 'Неверный пароль';
+          break;
+        case 'invalid-email':
+          message = 'Неверный формат email';
+          break;
+        case 'user-disabled':
+          message = 'Аккаунт отключён';
+          break;
+        default:
+          message = 'Ошибка входа. Попробуйте позже';
+      }
+
+      CustomSnackBar.showError(context: context, message: message);
+    } catch (e) {
+      CustomSnackBar.showError(context: context, message: 'Произошла ошибка: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _saveFCMToken(String userId) async {
+    try {
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token != null) {
+        await FirebaseFirestore.instance.collection('users').doc(userId).set({
+          'fcmToken': token,
+          'lastLogin': DateTime.now().toIso8601String(),
+        }, SetOptions(merge: true));
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _checkUserSpecialization() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+    final spec = doc.data()?['specialization'] ?? 0;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('userSpecialization', spec);
+
+    String route;
+    switch (spec) {
+      case 4: route = '/MasterScreen'; break;
+      case 5: route = '/IPKScreen'; break;
+      case 1: route = '/Sborka'; break;
+      case 2: route = '/Montasch'; break;
+      case 3: route = '/Pacet'; break;
+      default: route = '/specialization'; break;
+    }
+
+    if (mounted) {
+      Navigator.pushReplacementNamed(context, route);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final scale = getScaleFactor(context);
-
-    return MaterialApp(
-      navigatorKey: _navigatorKey,
-      theme: ThemeData(primaryColor: Colors.greenAccent),
-      home: ScaffoldMessenger(
-        key: _scaffoldKey,
-        child: Scaffold(
-          backgroundColor: Colors.white,
-          body: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.white,
-                  Colors.white,
-                  Color(0xFFFEF2F2),
+    return Scaffold(
+      backgroundColor: const Color(0xFFFAFBFC),
+      body: SafeArea(
+        child: Column(
+          children: [
+            // AppBar
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+              child: Row(
+                children: [
+                  _buildBackButton(),
+                  Expanded(
+                    child: Text(
+                      'Вход в систему',
+                      style: TextStyle(
+                        fontSize: 18.sp,
+                        fontFamily: 'GolosB',
+                        color: const Color(0xFF1A1A2E),
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  SizedBox(width: 44.w), // Для баланса
                 ],
               ),
             ),
-            child: Center(
+
+            Expanded(
               child: SingleChildScrollView(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Container(
-                      margin: EdgeInsets.only(bottom: 50.0 * scale, top: 1.0),
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          Container(
-                            width: 120 * scale,
-                            height: 120 * scale,
-                            decoration: BoxDecoration(
-                              color: Colors.red.withOpacity(0.1),
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          Container(
-                            width: 280 * scale,
-                            height: 55 * scale,
-                            child: Image(image: AssetImage('assets/PSM.png')),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Container(
-                      margin: EdgeInsets.only(bottom: 40.0 * scale),
+                physics: const BouncingScrollPhysics(),
+                padding: EdgeInsets.symmetric(horizontal: 28.w),
+                child: FadeTransition(
+                  opacity: _fadeIn,
+                  child: SlideTransition(
+                    position: _slideUp,
+                    child: Form(
+                      key: _formKey,
                       child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          SizedBox(height: 20.h),
+
+                          // Заголовок
                           Text(
-                            'Вход в систему',
+                            'С возвращением! 👋',
                             style: TextStyle(
-                              fontSize: 32 * scale,
+                              fontSize: 23.sp,
                               fontFamily: 'GolosB',
-                              color: Colors.black,
                               fontWeight: FontWeight.w700,
+                              color: const Color(0xFF1A1A2E),
                             ),
                           ),
-                          SizedBox(height: 8 * scale),
+                          SizedBox(height: 8.h),
                           Text(
-                            'Введите ваши данные для входа',
+                            'Введите свои данные для входа в систему',
                             style: TextStyle(
-                              fontSize: 16 * scale,
+                              fontSize: 15.sp,
                               fontFamily: 'GolosR',
-                              color: Colors.grey[600],
+                              color: const Color(0xFF6B7280),
                             ),
                           ),
-                        ],
-                      ),
-                    ),
-                    Container(
-                      width: double.infinity,
-                      padding: EdgeInsets.all(30 * scale),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(25 * scale),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 20 * scale,
-                            offset: Offset(0, 10 * scale),
+
+                          SizedBox(height: 40.h),
+
+                          // Поле email
+                          _buildTextField(
+                            controller: _emailController,
+                            focusNode: _emailFocus,
+                            label: 'Email',
+                            hint: 'name@company.com',
+                            icon: Icons.email_outlined,
+                            keyboardType: TextInputType.emailAddress,
+                            validator: (value) {
+                              if (value == null || value.isEmpty) {
+                                return 'Введите email';
+                              }
+                              if (!EmailValidator.validate(value)) {
+                                return 'Неверный формат email';
+                              }
+                              return null;
+                            },
                           ),
-                        ],
-                        border: Border.all(
-                          color: Colors.grey.withOpacity(0.1),
-                          width: 1,
-                        ),
-                      ),
-                      child: Column(
-                        children: [
-                          Container(
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(15 * scale),
-                              color: Colors.grey[50],
-                            ),
-                            child: TextFormField(
-                              keyboardType: TextInputType.emailAddress,
-                              autocorrect: false,
-                              autovalidateMode: AutovalidateMode.onUserInteraction,
-                              validator: (email) =>
-                              email != null && !EmailValidator.validate(email)
-                                  ? 'Введите верную почту'
-                                  : null,
-                              decoration: InputDecoration(
-                                border: InputBorder.none,
-                                hintText: 'Электронная почта...',
-                                contentPadding: EdgeInsets.symmetric(
-                                    horizontal: 20 * scale,
-                                    vertical: 18 * scale
-                                ),
-                                prefixIcon: Icon(
-                                  Icons.email_outlined,
-                                  color: Colors.grey[500],
-                                  size: 24 * scale,
-                                ),
-                                hintStyle: TextStyle(
-                                  fontFamily: 'GolosR',
-                                  color: Colors.grey[500],
-                                  fontSize: 16 * scale,
-                                ),
+
+                          SizedBox(height: 20.h),
+
+                          // Поле пароля
+                          _buildTextField(
+                            controller: _passwordController,
+                            focusNode: _passwordFocus,
+                            label: 'Пароль',
+                            hint: '••••••••',
+                            icon: Icons.lock_outlined,
+                            obscureText: !_isPasswordVisible,
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _isPasswordVisible
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
+                                color: const Color(0xFF9CA3AF),
+                                size: 22.w,
                               ),
-                              controller: emailController,
-                            ),
-                          ),
-                          SizedBox(height: 20 * scale),
-                          Container(
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(15 * scale),
-                              color: Colors.grey[50],
-                            ),
-                            child: TextFormField(
-                              autocorrect: false,
-                              autovalidateMode: AutovalidateMode.onUserInteraction,
-                              validator: (password) =>
-                              password != null && password.length < 6
-                                  ? 'Минимум 6 символов'
-                                  : null,
-                              obscureText: !_isPasswordVisible,
-                              decoration: InputDecoration(
-                                border: InputBorder.none,
-                                hintText: 'Пароль...',
-                                contentPadding: EdgeInsets.symmetric(
-                                    horizontal: 20 * scale,
-                                    vertical: 18 * scale
-                                ),
-                                prefixIcon: Icon(
-                                  Icons.lock_outline,
-                                  color: Colors.grey[500],
-                                  size: 24 * scale,
-                                ),
-                                suffixIcon: IconButton(
-                                  icon: Icon(
-                                    _isPasswordVisible
-                                        ? Icons.visibility_outlined
-                                        : Icons.visibility_off_outlined,
-                                    color: Colors.grey[500],
-                                    size: 24 * scale,
-                                  ),
-                                  onPressed: () {
-                                    setState(() {
-                                      _isPasswordVisible = !_isPasswordVisible;
-                                    });
-                                  },
-                                ),
-                                hintStyle: TextStyle(
-                                  fontFamily: 'GolosR',
-                                  color: Colors.grey[500],
-                                  fontSize: 16 * scale,
-                                ),
-                              ),
-                              controller: passwordController,
-                            ),
-                          ),
-                          SizedBox(height: 30 * scale),
-                          Container(
-                            width: double.infinity,
-                            height: 60 * scale,
-                            child: ElevatedButton(
-                              onPressed: _isLoading ? null : () => login(context),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.red,
-                                foregroundColor: Colors.white,
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(15 * scale),
-                                ),
-                                shadowColor: Colors.red.withOpacity(0.3),
-                              ),
-                              child: _isLoading
-                                  ? SizedBox(
-                                width: 20 * scale,
-                                height: 20 * scale,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                                  : Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Text(
-                                    'Войти в систему',
-                                    style: TextStyle(
-                                      fontSize: 18 * scale,
-                                      fontFamily: 'GolosB',
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                  SizedBox(width: 10 * scale),
-                                  Icon(
-                                    Icons.arrow_forward_rounded,
-                                    size: 20 * scale,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          SizedBox(height: 20 * scale),
-                          Container(
-                            width: double.infinity,
-                            height: 55 * scale,
-                            child: OutlinedButton(
-                              onPressed: _isLoading ? null : () {
-                                Navigator.pushReplacementNamed(context, '/Reg');
+                              onPressed: () {
+                                setState(() => _isPasswordVisible = !_isPasswordVisible);
                               },
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.red,
-                                side: BorderSide(
-                                  color: Colors.red,
-                                  width: 2,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(15 * scale),
-                                ),
-                                backgroundColor: Colors.transparent,
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
+                            ),
+                            validator: (value) {
+                              if (value == null || value.isEmpty) {
+                                return 'Введите пароль';
+                              }
+                              if (value.length < 6) {
+                                return 'Минимум 6 символов';
+                              }
+                              return null;
+                            },
+                          ),
+
+                          SizedBox(height: 16.h),
+
+                          // Запомнить меня и Забыли пароль
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              // Запомнить меня
+                              Row(
                                 children: [
-                                  Icon(
-                                    Icons.person_add_alt_1_outlined,
-                                    size: 20 * scale,
+                                  SizedBox(
+                                    width: 24.w,
+                                    height: 24.w,
+                                    child: Checkbox(
+                                      value: _rememberMe,
+                                      onChanged: (v) => setState(() => _rememberMe = v ?? false),
+                                      activeColor: const Color(0xFFDC2626),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(6.r),
+                                      ),
+                                    ),
                                   ),
-                                  SizedBox(width: 10 * scale),
+                                  SizedBox(width: 8.w),
                                   Text(
-                                    'Создать аккаунт',
+                                    'Запомнить меня',
                                     style: TextStyle(
-                                      fontSize: 16 * scale,
-                                      fontFamily: 'GolosB',
-                                      color: Colors.red,
+                                      fontSize: 12.sp,
+                                      fontFamily: 'GolosR',
+                                      color: const Color(0xFF4B5563),
                                     ),
                                   ),
                                 ],
                               ),
-                            ),
+
+                              // Забыли пароль
+                              GestureDetector(
+                                onTap: () => _showForgotPasswordDialog(),
+                                child: Text(
+                                  'Забыли пароль?',
+                                  style: TextStyle(
+                                    fontSize: 12.sp,
+                                    fontFamily: 'GolosB',
+                                    color: const Color(0xFFDC2626),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
+
+                          SizedBox(height: 32.h),
+
+                          // Кнопка входа
+                          _buildLoginButton(),
+
+                          SizedBox(height: 24.h),
+
+                          // Разделитель
+                          Row(
+                            children: [
+                              Expanded(child: Divider(color: const Color(0xFFE5E7EB))),
+                              Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 16.w),
+                                child: Text(
+                                  'или',
+                                  style: TextStyle(
+                                    fontSize: 14.sp,
+                                    fontFamily: 'GolosR',
+                                    color: const Color(0xFF9CA3AF),
+                                  ),
+                                ),
+                              ),
+                              Expanded(child: Divider(color: const Color(0xFFE5E7EB))),
+                            ],
+                          ),
+
+                          SizedBox(height: 24.h),
+
+                          // Кнопка регистрации
+                          _buildRegisterButton(),
+
+                          SizedBox(height: 40.h),
                         ],
                       ),
                     ),
-                    SizedBox(height: 40 * scale),
-                    Container(
-                      width: 160 * scale,
-                      height: 50 * scale,
-                      child: OutlinedButton(
-                        onPressed: () {
-                          if (theme == 0)
-                            Navigator.pushReplacementNamed(context, '/MS_W');
-                          else
-                            Navigator.pushReplacementNamed(context, '/MS_B');
-                        },
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.grey[600],
-                          side: BorderSide(
-                            color: Colors.grey[400]!,
-                            width: 1,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12 * scale),
-                          ),
-                          backgroundColor: Colors.white,
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.arrow_back_rounded,
-                              size: 18 * scale,
-                            ),
-                            SizedBox(width: 8 * scale),
-                            Text(
-                              'Назад',
-                              style: TextStyle(
-                                fontSize: 15 * scale,
-                                fontFamily: 'GolosR',
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    SizedBox(height: 30 * scale),
-                  ],
+                  ),
                 ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBackButton() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => Navigator.pushReplacementNamed(context, '/MS_W'),
+        borderRadius: BorderRadius.circular(12.r),
+        child: Container(
+          width: 44.w,
+          height: 44.w,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12.r),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+          ),
+          child: Icon(
+            Icons.arrow_back_rounded,
+            size: 22.w,
+            color: const Color(0xFF374151),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required FocusNode focusNode,
+    required String label,
+    required String hint,
+    required IconData icon,
+    required String? Function(String?) validator,
+    TextInputType? keyboardType,
+    bool obscureText = false,
+    Widget? suffixIcon,
+  }) {
+    final isFocused = focusNode.hasFocus;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 14.sp,
+            fontFamily: 'GolosB',
+            color: const Color(0xFF374151),
+          ),
+        ),
+        SizedBox(height: 8.h),
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16.r),
+            border: Border.all(
+              color: isFocused ? const Color(0xFFDC2626) : const Color(0xFFE5E7EB),
+              width: isFocused ? 2 : 1,
+            ),
+            boxShadow: isFocused ? [
+              BoxShadow(
+                color: const Color(0xFFDC2626).withOpacity(0.1),
+                blurRadius: 8,
+                offset: const Offset(0, 4),
+              ),
+            ] : null,
+          ),
+          child: TextFormField(
+            controller: controller,
+            focusNode: focusNode,
+            obscureText: obscureText,
+            keyboardType: keyboardType,
+            validator: validator,
+            style: TextStyle(
+              fontSize: 16.sp,
+              fontFamily: 'GolosR',
+              color: const Color(0xFF1A1A2E),
+            ),
+            decoration: InputDecoration(
+              hintText: hint,
+              hintStyle: TextStyle(
+                fontSize: 16.sp,
+                fontFamily: 'GolosR',
+                color: const Color(0xFF9CA3AF),
+              ),
+              prefixIcon: Icon(
+                icon,
+                size: 22.w,
+                color: isFocused ? const Color(0xFFDC2626) : const Color(0xFF9CA3AF),
+              ),
+              suffixIcon: suffixIcon,
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 16.h),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLoginButton() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _isLoading ? null : _login,
+        borderRadius: BorderRadius.circular(16.r),
+        child: Container(
+          width: double.infinity,
+          height: 56.h,
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFFDC2626), Color(0xFFB91C1C)],
+            ),
+            borderRadius: BorderRadius.circular(16.r),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFDC2626).withOpacity(0.3),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Center(
+            child: _isLoading
+                ? SizedBox(
+              width: 24.w,
+              height: 24.w,
+              child: CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 2.5,
+              ),
+            )
+                : Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  'Войти',
+                  style: TextStyle(
+                    fontSize: 17.sp,
+                    fontFamily: 'GolosB',
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                SizedBox(width: 8.w),
+                Icon(
+                  Icons.arrow_forward_rounded,
+                  color: Colors.white,
+                  size: 22.w,
+                ),
+              ],
             ),
           ),
         ),
       ),
     );
   }
-}
 
-// 🔥 ВАЖНЫЙ МЕТОД: Сохраняет FCM токен при входе
-Future<void> _saveFCMTokenOnLogin(String userId) async {
-  try {
-    print('🔄 Сохраняю FCM токен при входе для пользователя $userId');
-
-    String? token = await FirebaseMessaging.instance.getToken();
-
-    if (token == null || token.isEmpty) {
-      print('⚠️ FCM токен не получен, пробую снова...');
-      await Future.delayed(Duration(seconds: 1));
-      token = await FirebaseMessaging.instance.getToken();
-    }
-
-    if (token != null && token.isNotEmpty) {
-      print('📱 FCM токен получен: ${token.substring(0, 30)}...');
-
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userId)
-          .set({
-        'fcmToken': token,
-        'fcmTokenUpdatedAt': FieldValue.serverTimestamp(),
-        'lastLogin': DateTime.now().toIso8601String(),
-      }, SetOptions(merge: true));
-
-      print('✅ FCM токен сохранен при входе для пользователя $userId');
-    } else {
-      print('❌ Не удалось получить FCM токен при входе');
-    }
-  } catch (e) {
-    print('❌ Ошибка сохранения токена при входе: $e');
-  }
-}
-
-Future<void> login(BuildContext context) async {
-  String emailText = emailController.text.trim();
-  String passwordText = passwordController.text.trim();
-
-  _WhodState state = _scaffoldKey.currentContext!.findAncestorStateOfType<_WhodState>()!;
-  state.setState(() {
-    state._isLoading = true;
-  });
-
-  if (!EmailValidator.validate(emailText) || passwordText.length < 6) {
-    CustomSnackBar.showError(
-      context: context,
-      message: 'Проверьте правильность введенных данных',
+  Widget _buildRegisterButton() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => Navigator.pushReplacementNamed(context, '/Reg'),
+        borderRadius: BorderRadius.circular(16.r),
+        child: Container(
+          width: double.infinity,
+          height: 56.h,
+          decoration: BoxDecoration(
+            color: const Color(0xFFFEF2F2),
+            borderRadius: BorderRadius.circular(16.r),
+            border: Border.all(
+              color: const Color(0xFFFCA5A5),
+              width: 1.5,
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.person_add_alt_1_rounded,
+                color: const Color(0xFFDC2626),
+                size: 22.w,
+              ),
+              SizedBox(width: 12.w),
+              Text(
+                'Создать аккаунт',
+                style: TextStyle(
+                  fontSize: 17.sp,
+                  fontFamily: 'GolosB',
+                  color: const Color(0xFFDC2626),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
-    state.setState(() {
-      state._isLoading = false;
-    });
-    return;
   }
 
-  try {
-    await FirebaseAuth.instance.signInWithEmailAndPassword(
-      email: emailText,
-      password: passwordText,
-    );
+  void _showForgotPasswordDialog() {
+    final emailController = TextEditingController();
 
-    // Сохраняем состояние авторизации
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('isLoggedIn', true);
-
-    // 🔥 ВАЖНО: Сохраняем FCM токен после успешного входа
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      await _saveFCMTokenOnLogin(user.uid);
-    }
-
-    await _checkUserSpecialization(context);
-
-  } on FirebaseAuthException catch (e) {
-    print(e.code);
-
-    String errorMessage;
-    if (e.code == 'user-not-found' || e.code == 'wrong-password') {
-      errorMessage = 'Неправильный email или пароль. Повторите попытку';
-    } else if (e.code == 'user-disabled') {
-      errorMessage = 'Аккаунт отключен. Обратитесь в поддержку.';
-    } else if (e.code == 'invalid-email') {
-      errorMessage = 'Неверный формат email адреса.';
-    } else {
-      errorMessage = 'Неизвестная ошибка! Попробуйте еще раз или обратитесь в поддержку.';
-    }
-
-    CustomSnackBar.showError(
+    showModalBottomSheet(
       context: context,
-      message: errorMessage,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Padding(
+        // Отступ для клавиатуры
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: Container(
+          // Фиксированная высота вместо DraggableScrollableSheet
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.6,
+          ),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24.r)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Индикатор
+              Center(
+                child: Container(
+                  width: 40.w,
+                  height: 4.h,
+                  margin: EdgeInsets.only(top: 16.h, bottom: 8.h),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE5E7EB),
+                    borderRadius: BorderRadius.circular(2.r),
+                  ),
+                ),
+              ),
+
+              // Прокручиваемый контент
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.all(24.w),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Восстановление пароля',
+                        style: TextStyle(
+                          fontSize: 24.sp,
+                          fontFamily: 'GolosB',
+                          color: const Color(0xFF1A1A2E),
+                        ),
+                      ),
+                      SizedBox(height: 8.h),
+                      Text(
+                        'Введите email, указанный при регистрации. Мы отправим ссылку для сброса пароля.',
+                        style: TextStyle(
+                          fontSize: 15.sp,
+                          fontFamily: 'GolosR',
+                          color: const Color(0xFF6B7280),
+                        ),
+                      ),
+                      SizedBox(height: 24.h),
+
+                      // Поле email
+                      _buildTextField(
+                        controller: emailController,
+                        focusNode: FocusNode(),
+                        label: 'Email',
+                        hint: 'name@company.com',
+                        icon: Icons.email_outlined,
+                        validator: (v) => null,
+                      ),
+
+                      SizedBox(height: 24.h),
+
+                      // Кнопка отправки — теперь внутри прокрутки
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () async {
+                            if (emailController.text.isNotEmpty) {
+                              try {
+                                await FirebaseAuth.instance.sendPasswordResetEmail(
+                                  email: emailController.text.trim(),
+                                );
+                                Navigator.pop(context);
+                                CustomSnackBar.showSuccess(
+                                  context: context,
+                                  message: 'Письмо отправлено! Проверьте почту',
+                                );
+                              } catch (e) {
+                                CustomSnackBar.showError(
+                                  context: context,
+                                  message: 'Ошибка: $e',
+                                );
+                              }
+                            }
+                          },
+                          borderRadius: BorderRadius.circular(16.r),
+                          child: Container(
+                            width: double.infinity,
+                            height: 56.h,
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFFDC2626), Color(0xFFB91C1C)],
+                              ),
+                              borderRadius: BorderRadius.circular(16.r),
+                            ),
+                            child: Center(
+                              child: Text(
+                                'Отправить ссылку',
+                                style: TextStyle(
+                                  fontSize: 17.sp,
+                                  fontFamily: 'GolosB',
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      // Дополнительный отступ снизу
+                      SizedBox(height: 16.h),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
-  } catch (e) {
-    CustomSnackBar.showError(
-      context: context,
-      message: 'Произошла ошибка. Попробуйте еще раз.',
-    );
-  } finally {
-    state.setState(() {
-      state._isLoading = false;
-    });
-  }
-}
-
-Future<void> _checkUserSpecialization(BuildContext context) async {
-  try {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
-
-      if (userDoc.exists) {
-        final userData = userDoc.data();
-        final specialization = userData?['specialization'] ?? 0;
-
-        // 🔥 Еще раз проверяем и сохраняем FCM токен
-        await _saveFCMTokenOnLogin(user.uid);
-
-        // Сохраняем специализацию пользователя
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setInt('userSpecialization', specialization);
-
-        switch (specialization) {
-          case 4:
-            Navigator.of(context).pushReplacementNamed('/MasterScreen');
-            break;
-          case 1:
-            Navigator.of(context).pushReplacementNamed('/Sborka');
-            break;
-          case 2:
-            Navigator.of(context).pushReplacementNamed('/Montasch');
-            break;
-          case 3:
-            Navigator.of(context).pushReplacementNamed('/Pacet');
-            break;
-          default:
-            Navigator.of(context).pushReplacementNamed('/specialization');
-            break;
-        }
-      } else {
-        Navigator.of(context).pushReplacementNamed('/specialization');
-      }
-    }
-  } catch (e) {
-    print('Ошибка при проверке специализации: $e');
-    Navigator.of(context).pushReplacementNamed('/MS_W');
   }
 }

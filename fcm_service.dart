@@ -1,4 +1,4 @@
-// fcm_service.dart (исправленный метод _getAccessTokenFallback)
+// fcm_service.dart
 import 'dart:convert';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -12,44 +12,35 @@ class FCMService {
   static String? _cachedAccessToken;
   static DateTime? _tokenExpiry;
 
-  // 🔴 ВСТАВЬТЕ ВАШ ТОКЕН СЮДА:
+  // 🔴 КЭШ для уникальных токенов (чтобы не отправлять дубликаты в одной сессии)
+  static final Set<String> _sentTokensCache = {};
+
   static const String _firebaseCiToken = '1//0561MvLUFhZPXCgYIARAAGAUSNwF-L9IrMvPrBIxUquQTmlRtIm09w5kXAzRBzmlzfp9mUBtWLyLqp0XCjlgXFOPLjVFtzylXdiY';
 
-  // 🔴 Упрощенный метод получения токена через Firebase CLI токен
   static Future<String> _getAccessToken() async {
-    // Если токен еще действителен (действителен 1 час)
     if (_cachedAccessToken != null &&
         _tokenExpiry != null &&
         _tokenExpiry!.isAfter(DateTime.now().add(Duration(minutes: 5)))) {
-      print('♻️ Использую кэшированный Access Token');
       return _cachedAccessToken!;
     }
 
-    print('🔄 Получаю новый Access Token...');
-
     try {
-      // 🔴 СПОСОБ 1: Используем Firebase CLI токен для получения access_token
       final accessToken = await _getAccessTokenFromFirebaseToken();
 
       if (accessToken.isNotEmpty) {
         _cachedAccessToken = accessToken;
         _tokenExpiry = DateTime.now().add(Duration(minutes: 55));
 
-        // Сохраняем в SharedPreferences
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('fcm_access_token', accessToken);
         await prefs.setString('fcm_token_expiry', _tokenExpiry!.toIso8601String());
 
-        print('✅ Access Token получен! Действителен до: $_tokenExpiry');
         return accessToken;
       }
 
       throw Exception('Не удалось получить токен');
 
     } catch (e) {
-      print('❌ Ошибка получения токена: $e');
-
-      // 🔴 Запасной вариант: проверяем сохраненный токен
       final prefs = await SharedPreferences.getInstance();
       final savedToken = prefs.getString('fcm_access_token');
       final savedExpiry = prefs.getString('fcm_token_expiry');
@@ -59,67 +50,52 @@ class FCMService {
         if (expiryDate.isAfter(DateTime.now())) {
           _cachedAccessToken = savedToken;
           _tokenExpiry = expiryDate;
-          print('✅ Использую сохраненный токен');
           return savedToken;
         }
       }
 
-      // 🔴 Критический fallback
-      print('⚠️ Использую ручной токен');
       return _getManualToken();
     }
   }
 
-  // 🔴 НОВЫЙ МЕТОД: Получение Access Token через Firebase CLI токен
   static Future<String> _getAccessTokenFromFirebaseToken() async {
     try {
-      print('🔐 Пробую получить токен через Firebase CLI token...');
-
-      // Firebase CLI токен - это refresh token, из него можно получить access token
       final response = await http.post(
         Uri.parse('https://oauth2.googleapis.com/token'),
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: {
           'grant_type': 'refresh_token',
-          'refresh_token': _firebaseCiToken, // 🔴 ВАШ ТОКЕН ЗДЕСЬ
-          'client_id': '563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com', // Firebase CLI client ID
-          'client_secret': 'j9iVZfS8kkCEFUPaAeJV0sAi', // Firebase CLI client secret
+          'refresh_token': _firebaseCiToken,
+          'client_id': '563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com',
+          'client_secret': 'j9iVZfS8kkCEFUPaAeJV0sAi',
         }.entries.map((e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&'),
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final accessToken = data['access_token'] as String;
-
-        print('✅ Получен Access Token через Firebase CLI');
-        return accessToken;
+        return data['access_token'] as String;
       } else {
-        print('❌ Ошибка Firebase CLI: ${response.statusCode} ${response.body}');
-
-        // 🔴 Альтернатива: попробуем использовать токен как есть
-        print('🔄 Пробую использовать Firebase CLI токен напрямую...');
         return _firebaseCiToken;
       }
 
     } catch (e) {
-      print('❌ Ошибка при работе с Firebase CLI токеном: $e');
       return '';
     }
   }
 
-  // 🔴 Ручной токен (используйте только если выше не работает)
   static String _getManualToken() {
-    // 🔴 ЕСЛИ НИЧЕГО НЕ РАБОТАЕТ, ПОПРОБУЙТЕ ЭТОТ ТОКЕН:
-    // Получите через: gcloud auth print-access-token
-
-    const manualToken = 'ya29.c.c0AZ1aNiREPLACE_WITH_REAL_TOKEN'; // 🔴 ЗАМЕНИТЕ
-
+    const manualToken = 'ya29.c.c0AZ1aNiREPLACE_WITH_REAL_TOKEN';
     _tokenExpiry = DateTime.now().add(Duration(minutes: 55));
-
     return manualToken;
   }
 
-  // 🔴 Упрощенный метод отправки с автоматическим обновлением токена
+  // 🔴 ОЧИСТКА кэша отправленных токенов (вызывать при старте новой отправки)
+  static void clearSentCache() {
+    _sentTokensCache.clear();
+    print('🧹 Кэш отправленных токенов очищен');
+  }
+
+  // 🔴 ОСНОВНОЙ МЕТОД ОТПРАВКИ с дедупликацией
   static Future<Map<String, dynamic>> sendPushNotification({
     required List<String> tokens,
     required String title,
@@ -127,142 +103,183 @@ class FCMService {
     required Map<String, dynamic> data,
   }) async {
     if (tokens.isEmpty) {
-      print('⚠️ Нет токенов для отправки');
       return {'success': false, 'error': 'Нет токенов', 'sent': 0, 'failed': 0};
     }
 
-    print('🔄 Начинаю отправку ${tokens.length} уведомлений...');
+    // 🔴 УНИКАЛИЗАЦИЯ: убираем дубликаты токенов
+    final uniqueTokens = tokens.toSet().toList();
+    print('📊 Уникальных токенов: ${uniqueTokens.length} (из ${tokens.length})');
+
+    // 🔴 ФИЛЬТРАЦИЯ: убираем уже отправленные в этой сессии
+    final tokensToSend = uniqueTokens.where((t) => !_sentTokensCache.contains(t)).toList();
+    print('📤 Новых токенов для отправки: ${tokensToSend.length}');
+
+    if (tokensToSend.isEmpty) {
+      print('✅ Все токены уже обработаны в этой сессии');
+      return {'success': true, 'sent': 0, 'failed': 0, 'skipped': uniqueTokens.length};
+    }
+
+    print('🔄 Начинаю отправку ${tokensToSend.length} уведомлений...');
 
     int successCount = 0;
     int failCount = 0;
+    int invalidTokenCount = 0;
 
     try {
-      // 🔴 ПОЛУЧАЕМ СВЕЖИЙ ТОКЕН
       final accessToken = await _getAccessToken();
 
       if (accessToken.isEmpty) {
         throw Exception('Не удалось получить Access Token');
       }
 
-      for (var token in tokens) {
-        try {
-          print('📤 Отправляю на токен: ${token.substring(0, 20)}...');
+      // 🔴 ОТПРАВКА ПАЧКАМИ по 500 штук (лимит FCM)
+      const batchSize = 500;
+      for (var i = 0; i < tokensToSend.length; i += batchSize) {
+        final batch = tokensToSend.skip(i).take(batchSize).toList();
 
-          final response = await http.post(
-            Uri.parse('https://fcm.googleapis.com/v1/projects/psm-prjct/messages:send'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $accessToken',
-            },
-            body: jsonEncode({
-              'message': {
-                'token': token,
-                'notification': {
-                  'title': title,
-                  'body': body,
-                },
-                'data': {
-                  ...data,
-                  'click_action': 'FLUTTER_NOTIFICATION_CLICK',
-                },
-              }
-            }),
-          );
-
-          if (response.statusCode == 200) {
-            successCount++;
-            print('   ✅ Успешно');
-          } else {
-            failCount++;
-            print('   ❌ Ошибка ${response.statusCode}');
-
-            // Если токен истек (401) - сбрасываем кэш
-            if (response.statusCode == 401) {
-              print('   🔄 Токен истек. Сбрасываю кэш...');
-              _cachedAccessToken = null;
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.remove('fcm_access_token');
-              await prefs.remove('fcm_token_expiry');
+        for (var token in batch) {
+          try {
+            // 🔴 ПРОВЕРКА: не отправляли ли уже
+            if (_sentTokensCache.contains(token)) {
+              print('   ⏭️ Пропуск (уже отправлено): ${token.substring(0, 20)}...');
+              continue;
             }
+
+            print('📤 Отправляю на: ${token.substring(0, 20)}...');
+
+            final response = await http.post(
+              Uri.parse('https://fcm.googleapis.com/v1/projects/psm-prjct/messages:send'),
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer $accessToken',
+              },
+              body: jsonEncode({
+                'message': {
+                  'token': token,
+                  'notification': {
+                    'title': title,
+                    'body': body,
+                  },
+                  'data': {
+                    ...data,
+                    'click_action': 'FLUTTER_NOTIFICATION_CLICK',
+                  },
+                }
+              }),
+            );
+
+            if (response.statusCode == 200) {
+              successCount++;
+              _sentTokensCache.add(token); // 🔴 Помечаем как отправленный
+              print('   ✅ Успешно');
+            } else {
+              final errorBody = jsonDecode(response.body);
+              final errorCode = errorBody['error']?['code'] ?? '';
+
+              // 🔴 ОБРАБОТКА НЕВАЛИДНЫХ ТОКЕНОВ
+              if (errorCode == 'NOT_FOUND' || errorCode == 'INVALID_ARGUMENT') {
+                invalidTokenCount++;
+                print('   🗑️ Токен невалиден, помечаем для удаления: $errorCode');
+                await _markTokenAsInvalid(token);
+              } else if (response.statusCode == 401) {
+                print('   🔄 Токен доступа истек, сбрасываю кэш...');
+                _cachedAccessToken = null;
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.remove('fcm_access_token');
+                await prefs.remove('fcm_token_expiry');
+                failCount++;
+              } else {
+                failCount++;
+                print('   ❌ Ошибка ${response.statusCode}: ${response.body.substring(0, 100)}');
+              }
+            }
+
+            // 🔴 НЕБОЛЬШАЯ ЗАДЕРЖКА чтобы не перегружать API
+            await Future.delayed(Duration(milliseconds: 10));
+
+          } catch (e) {
+            failCount++;
+            print('   ❌ Исключение: $e');
           }
-
-          await Future.delayed(Duration(milliseconds: 50));
-
-        } catch (e) {
-          failCount++;
-          print('   ❌ Исключение: $e');
         }
       }
 
-      print('📊 ИТОГ отправки: ✅ $successCount, ❌ $failCount');
+      print('📊 ИТОГ: ✅ $successCount, ❌ $failCount, 🗑️ $invalidTokenCount невалидных');
 
       return {
         'success': successCount > 0,
         'sent': successCount,
         'failed': failCount,
-        'total': tokens.length,
+        'invalid': invalidTokenCount,
+        'total': tokensToSend.length,
       };
 
     } catch (e) {
       print('❌ Критическая ошибка отправки: $e');
-      return {'success': false, 'error': e.toString(), 'sent': 0, 'failed': tokens.length};
+      return {'success': false, 'error': e.toString(), 'sent': 0, 'failed': tokensToSend.length};
     }
   }
 
-  // 🔴 МЕТОД ДЛЯ РУЧНОГО ОБНОВЛЕНИЯ ТОКЕНА
-  static Future<void> refreshTokenManually() async {
-    print('🔄 Ручное обновление токена...');
+  // 🔴 ПОМЕТКА невалидного токена в Firestore
+  static Future<void> _markTokenAsInvalid(String token) async {
+    try {
+      // Ищем пользователя с этим токеном
+      final usersSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .where('fcmToken', isEqualTo: token)
+          .get();
 
-    _cachedAccessToken = null;
-    _tokenExpiry = null;
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('fcm_access_token');
-    await prefs.remove('fcm_token_expiry');
-
-    print('✅ Кэш токена очищен. Токен будет обновлен при следующей отправке.');
+      for (var doc in usersSnapshot.docs) {
+        await doc.reference.update({
+          'fcmToken': null,
+          'fcmTokenInvalid': true,
+          'fcmTokenInvalidAt': FieldValue.serverTimestamp(),
+        });
+        print('   🗑️ Токен удалён у пользователя ${doc.id}');
+      }
+    } catch (e) {
+      print('   ⚠️ Не удалось удалить невалидный токен: $e');
+    }
   }
 
-  // 🔴 МЕТОД ДЛЯ ПРОВЕРКИ ТОКЕНА
-  static Future<void> testToken() async {
-    print('🧪 Тестирую токен...');
+  // 🔴 ПОЛУЧЕНИЕ ТОКЕНОВ с фильтрацией дубликатов и невалидных
+  static Future<List<String>> getTokensBySpecialization(int specialization) async {
+    List<String> tokens = [];
 
     try {
-      final token = await _getAccessToken();
+      final usersSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .where('specialization', isEqualTo: specialization)
+          .where('fcmToken', isNotEqualTo: null)
+          .get();
 
-      if (token.isEmpty) {
-        print('❌ Токен не получен');
-        return;
+      final Set<String> uniqueTokens = {};
+
+      for (var doc in usersSnapshot.docs) {
+        final token = doc.data()['fcmToken'] as String?;
+        final isInvalid = doc.data()['fcmTokenInvalid'] == true;
+
+        // 🔴 ПРОВЕРКИ: токен должен быть валидным и уникальным
+        if (token != null &&
+            token.isNotEmpty &&
+            !isInvalid &&
+            token.length > 50 && // Минимальная длина валидного FCM токена
+            !uniqueTokens.contains(token)) {
+          uniqueTokens.add(token);
+        }
       }
 
-      print('✅ Токен получен: ${token.substring(0, 50)}...');
-
-      // Тестовая отправка
-      final testResponse = await http.post(
-        Uri.parse('https://fcm.googleapis.com/v1/projects/psm-prjct/messages:send'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
-          'message': {
-            'token': 'test_token', // Тестовый токен
-            'notification': {
-              'title': 'Test',
-              'body': 'Test notification',
-            },
-          }
-        }),
-      );
-
-      print('🧪 Тестовый запрос: ${testResponse.statusCode}');
+      tokens = uniqueTokens.toList();
+      print('✅ Найдено ${tokens.length} уникальных валидных токенов для спец. $specialization');
 
     } catch (e) {
-      print('❌ Ошибка тестирования токена: $e');
+      print('❌ Ошибка получения токенов: $e');
     }
+
+    return tokens;
   }
 
-  // Остальные методы без изменений...
+  // 🔴 ИНИЦИАЛИЗАЦИЯ с проверкой существующего токена
   static Future<void> initialize() async {
     print('🚀 Инициализация FCM...');
 
@@ -274,68 +291,89 @@ class FCMService {
         provisional: false,
       );
 
-      print('✅ Разрешение на уведомления: ${settings.authorizationStatus}');
+      print('✅ Разрешение: ${settings.authorizationStatus}');
 
       String? token = await _fcm.getToken();
       if (token != null) {
-        print('✅ FCM Token пользователя: ${token.substring(0, 30)}...');
+        print('✅ FCM Token: ${token.substring(0, 30)}...');
         await _saveTokenToFirestore(token);
-      } else {
-        print('⚠️ Не удалось получить FCM Token');
       }
 
       _fcm.onTokenRefresh.listen(_saveTokenToFirestore);
 
-      // 🔴 Тестируем токен при инициализации
-      await testToken();
-
-      print('✅ FCM успешно инициализирован');
+      print('✅ FCM инициализирован');
 
     } catch (e) {
       print('❌ Ошибка инициализации FCM: $e');
     }
   }
 
+  // 🔴 СОХРАНЕНИЕ ТОКЕНА с проверкой на дубликаты
   static Future<void> _saveTokenToFirestore(String token) async {
     try {
       final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .set({
-          'fcmToken': token,
-          'fcmTokenUpdatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
+      if (user == null) return;
+
+      // 🔴 ПРОВЕРКА: не сохранён ли уже такой токен у другого пользователя
+      final existingUsers = await FirebaseFirestore.instance
+          .collection('users')
+          .where('fcmToken', isEqualTo: token)
+          .get();
+
+      // Удаляем токен у других пользователей (один токен = один пользователь)
+      for (var doc in existingUsers.docs) {
+        if (doc.id != user.uid) {
+          await doc.reference.update({
+            'fcmToken': null,
+            'fcmTokenReplacedBy': user.uid,
+            'fcmTokenReplacedAt': FieldValue.serverTimestamp(),
+          });
+          print('🔄 Токен перенесён от пользователя ${doc.id} к ${user.uid}');
+        }
       }
+
+      // Сохраняем токен текущему пользователю
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .set({
+        'fcmToken': token,
+        'fcmTokenUpdatedAt': FieldValue.serverTimestamp(),
+        'fcmTokenInvalid': false, // Сбрасываем флаг невалидности
+      }, SetOptions(merge: true));
+
+      print('✅ Токен сохранён для ${user.uid}');
+
     } catch (e) {
       print('❌ Ошибка сохранения токена: $e');
     }
   }
 
-  static Future<List<String>> getTokensBySpecialization(int specialization) async {
-    List<String> tokens = [];
+  // 🔴 РУЧНОЕ ОБНОВЛЕНИЕ ТОКЕНА
+  static Future<void> refreshTokenManually() async {
+    _cachedAccessToken = null;
+    _tokenExpiry = null;
+    _sentTokensCache.clear();
 
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('fcm_access_token');
+    await prefs.remove('fcm_token_expiry');
+
+    print('✅ Кэш очищен');
+  }
+
+  // 🔴 ТЕСТИРОВАНИЕ
+  static Future<void> testToken() async {
+    print('🧪 Тестирую токен...');
     try {
-      final usersSnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .where('specialization', isEqualTo: specialization)
-          .where('fcmToken', isNotEqualTo: null)
-          .get();
-
-      for (var doc in usersSnapshot.docs) {
-        final token = doc.data()['fcmToken'];
-        if (token != null && token.isNotEmpty) {
-          tokens.add(token);
-        }
+      final token = await _getAccessToken();
+      if (token.isEmpty) {
+        print('❌ Токен не получен');
+        return;
       }
-
-      print('✅ Найдено ${tokens.length} токенов для специализации $specialization');
-
+      print('✅ Токен: ${token.substring(0, 50)}...');
     } catch (e) {
-      print('❌ Ошибка получения токенов: $e');
+      print('❌ Ошибка: $e');
     }
-
-    return tokens;
   }
 }
