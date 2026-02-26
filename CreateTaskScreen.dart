@@ -1,4 +1,3 @@
-//кто это читает тот лох
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
@@ -47,7 +46,7 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
     if (diagonal < 800) return 1.2;
     if (diagonal < 1000) return 1.3;
     return 1.4;
-  }
+  } //кто это читает тот лох
 
   @override
   void initState() {
