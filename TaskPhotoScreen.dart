@@ -1,10 +1,44 @@
+// TaskPhotoScreen.dart
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
-import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:psm/custom_snackbar.dart';
+import 'package:image/image.dart' as img;
+import 'dart:typed_data'; // Добавьте в начало файла
+
+Future<List<int>> _compressImage(List<int> bytes, {required int maxSizeKB}) async {
+  if (bytes.length <= maxSizeKB * 1024) {
+    return bytes;
+  }
+
+  // 🔴 ИСПРАВЛЕНИЕ: Преобразуем в Uint8List
+  final Uint8List uint8Bytes = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+  img.Image? image = img.decodeImage(uint8Bytes);
+
+  if (image == null) return bytes;
+
+  const int maxDimension = 1200;
+  if (image.width > maxDimension || image.height > maxDimension) {
+    if (image.width > image.height) {
+      image = img.copyResize(image, width: maxDimension);
+    } else {
+      image = img.copyResize(image, height: maxDimension);
+    }
+  }
+
+  int quality = 85;
+  List<int> compressed = img.encodeJpg(image, quality: quality);
+
+  while (compressed.length > maxSizeKB * 1024 && quality > 30) {
+    quality -= 10;
+    compressed = img.encodeJpg(image, quality: quality);
+  }
+
+  return compressed;
+}
 
 class TaskPhotoScreen extends StatefulWidget {
   const TaskPhotoScreen({Key? key}) : super(key: key);
@@ -19,11 +53,11 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
   String? _base64Image;
   bool isLoading = false;
   String? userName;
-  String? reviewerName; // ✅ будет имя отклонившего
+  String? reviewerName;
 
   late String orderNumber;
   late String collectionName;
-  late int taskIndex;
+  late String taskId;
   late Map<String, dynamic> task;
   late int taskNumber;
   late String screenTitle;
@@ -61,22 +95,6 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
         });
       }
     }
-
-    // ✅ Загружаем имя того, кто отклонил
-    final reviewedBy = task['reviewedBy'];
-    if (reviewedBy != null) {
-      final reviewerDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(reviewedBy)
-          .get();
-      setState(() {
-        reviewerName = reviewerDoc.data()?['displayName'] ?? 'ИТР';
-      });
-    } else {
-      setState(() {
-        reviewerName = 'ИТР'; // fallback
-      });
-    }
   }
 
   @override
@@ -85,281 +103,141 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
     final args = ModalRoute.of(context)!.settings.arguments as Map<String, dynamic>;
     orderNumber = args['orderNumber'];
     collectionName = args['collectionName'];
-    taskIndex = args['taskIndex'];
+    taskId = args['taskId'];
     task = args['task'];
     taskNumber = args['taskNumber'];
     screenTitle = args['screenTitle'] ?? 'Задания';
 
-    if (task['resultImageBase64'] != null && task['resultImageBase64'].isNotEmpty) {
-      _base64Image = task['resultImageBase64'];
+    // Загружаем существующее фото результата если есть
+    if (task['resultImageRef'] != null) {
+      _loadExistingResultImage();
     }
   }
 
-  Color _getStatusColor(String status) {
-    switch (status) {
-      case 'completed':
-        return Colors.green;
-      case 'approved':
-        return Colors.green;
-      case 'rejected':
-        return Colors.orange;
-      case 'active':
-        return Colors.blue;
-      default:
-        return Colors.grey;
+  Future<void> _loadExistingResultImage() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('task_images')
+          .doc(task['resultImageRef'])
+          .get();
+      if (doc.exists && mounted) {
+        setState(() {
+          _base64Image = doc.data()?['imageBase64'];
+        });
+      }
+    } catch (e) {
+      print('Ошибка загрузки существующего фото: $e');
     }
   }
 
-  IconData _getStatusIcon(String status) {
-    switch (status) {
-      case 'completed':
-        return Icons.check_circle;
-      case 'approved':
-        return Icons.verified;
-      case 'rejected':
-        return Icons.warning;
-      case 'active':
-        return Icons.access_time;
-      default:
-        return Icons.help_outline;
+  Future<List<int>> _compressImage(List<int> bytes, {required int maxSizeKB}) async {
+    if (bytes.length <= maxSizeKB * 1024) return bytes;
+
+    img.Image? image = img.decodeImage(Uint8List.fromList(bytes));
+    if (image == null) return bytes;
+
+    const int maxDimension = 1200;
+    if (image.width > maxDimension || image.height > maxDimension) {
+      if (image.width > image.height) {
+        image = img.copyResize(image, width: maxDimension);
+      } else {
+        image = img.copyResize(image, height: maxDimension);
+      }
     }
-  }
 
-  String _getStatusText(String status) {
-    switch (status) {
-      case 'active':
-        return 'Активно';
-      case 'completed':
-        return 'Выполнено';
-      case 'approved':
-        return 'Подтверждено';
-      case 'rejected':
-        return 'На доработке';
-      default:
-        return 'Неизвестно';
+    int quality = 85;
+    List<int> compressed = img.encodeJpg(image, quality: quality);
+
+    while (compressed.length > maxSizeKB * 1024 && quality > 30) {
+      quality -= 10;
+      compressed = img.encodeJpg(image, quality: quality);
     }
+
+    return compressed;
   }
 
-  Future<void> _showImageSourceDialog() async {
-    final scale = getScaleFactor(context);
-    await showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(15 * scale),
-          ),
-          title: Text(
-            'Выберите источник фото',
-            style: TextStyle(
-              fontFamily: 'GolosB',
-              fontSize: 18 * scale,
-            ),
-            textAlign: TextAlign.center,
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: double.infinity,
-                height: 50 * scale,
-                margin: EdgeInsets.only(bottom: 10 * scale),
-                child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    _pickImageFromCamera();
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10 * scale),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.camera_alt, color: Colors.white, size: 20 * scale),
-                      SizedBox(width: 10 * scale),
-                      Text(
-                        'Сделать снимок',
-                        style: TextStyle(
-                          fontSize: 16 * scale,
-                          fontFamily: 'GolosR',
-                          color: Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              Container(
-                width: double.infinity,
-                height: 50 * scale,
-                child: OutlinedButton(
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    _pickImageFromGallery();
-                  },
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: Colors.red, width: 2),
-                    backgroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10 * scale),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.photo_library, color: Colors.red, size: 20 * scale),
-                      SizedBox(width: 10 * scale),
-                      Text(
-                        'Выбрать из галереи',
-                        style: TextStyle(
-                          fontSize: 14 * scale,
-                          fontFamily: 'GolosR',
-                          color: Colors.red,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _pickImageFromCamera() async {
+  Future<void> _pickImage(ImageSource source) async {
     try {
       final XFile? image = await _picker.pickImage(
-        source: ImageSource.camera,
+        source: source,
         maxWidth: 1024,
         maxHeight: 1024,
         imageQuality: 80,
       );
+      if (image == null) return;
 
-      if (image != null) {
-        await _processImage(File(image.path));
-      }
-    } catch (e) {
-      CustomSnackBar.showError(
-        context: context,
-        message: 'Ошибка при съемке фото: $e',
-      );
-    }
-  }
-
-  Future<void> _pickImageFromGallery() async {
-    try {
-      final XFile? image = await _picker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 1024,
-        maxHeight: 1024,
-        imageQuality: 80,
-      );
-
-      if (image != null) {
-        await _processImage(File(image.path));
-      }
-    } catch (e) {
-      CustomSnackBar.showError(
-        context: context,
-        message: 'Ошибка при выборе фото: $e',
-      );
-    }
-  }
-
-  Future<void> _processImage(File file) async {
-    try {
-      final bytes = await file.readAsBytes();
-
+      final bytes = await File(image.path).readAsBytes();
       if (bytes.length > 5 * 1024 * 1024) {
-        CustomSnackBar.showWarning(
-          context: context,
-          message: 'Фото слишком большое. Выберите файл меньше 5MB',
-        );
+        CustomSnackBar.showWarning(context: context, message: 'Фото > 5 МБ');
         return;
       }
 
-      final base64 = base64Encode(bytes);
+      final compressedBytes = await _compressImage(bytes, maxSizeKB: 500);
+      final base64 = base64Encode(compressedBytes);
+
+      if (base64.length > 700000) {
+        CustomSnackBar.showWarning(context: context, message: 'Фото слишком детализированное');
+        return;
+      }
 
       setState(() {
-        _selectedFile = file;
         _base64Image = base64;
       });
-
-      CustomSnackBar.showSuccess(
-        context: context,
-        message: 'Фото успешно загружено',
-      );
+      CustomSnackBar.showSuccess(context: context, message: 'Фото загружено');
     } catch (e) {
-      CustomSnackBar.showError(
-        context: context,
-        message: 'Ошибка обработки фото: $e',
-      );
+      CustomSnackBar.showError(context: context, message: 'Ошибка: $e');
     }
   }
 
   void _removeImage() {
-    setState(() {
-      _selectedFile = null;
-      _base64Image = null;
-    });
-
-    CustomSnackBar.showInfo(
-      context: context,
-      message: 'Фото удалено',
-    );
+    setState(() => _base64Image = null);
+    CustomSnackBar.showInfo(context: context, message: 'Фото удалено');
   }
 
-  Future<void> _markTaskCompleted() async {
+  // 🔴 ОБНОВЛЁННЫЙ метод отправки задачи
+  Future<void> _submitWork() async {
     if (_base64Image == null) {
-      CustomSnackBar.showWarning(
-        context: context,
-        message: 'Сначала прикрепите фото результата',
-      );
+      CustomSnackBar.showWarning(context: context, message: 'Прикрепите фото');
       return;
     }
-
-    setState(() {
-      isLoading = true;
-    });
-
+    setState(() => isLoading = true);
     try {
       final user = FirebaseAuth.instance.currentUser;
-
-      final orderDoc = await FirebaseFirestore.instance
+      final taskRef = FirebaseFirestore.instance
           .collection(collectionName)
           .doc(orderNumber)
-          .get();
+          .collection('tasks')
+          .doc(taskId);
 
-      if (!orderDoc.exists) {
-        throw Exception('Заказ не найден');
+      // Удаляем старое фото результата если есть
+      final oldResultRef = task['resultImageRef'];
+      if (oldResultRef != null) {
+        await FirebaseFirestore.instance.collection('task_images').doc(oldResultRef).delete();
       }
 
-      final orderData = orderDoc.data()!;
-      final tasks = List.from(orderData['tasks']);
+      // Сохраняем новое фото
+      final now = DateTime.now().toIso8601String();
+      final imageDoc = await FirebaseFirestore.instance.collection('task_images').add({
+        'imageBase64': _base64Image,
+        'orderNumber': orderNumber,
+        'collectionName': collectionName,
+        'taskNumber': taskNumber,
+        'createdBy': user?.uid,
+        'createdAt': now,
+        'taskType': 'result',
+        'isIPK': task['isIPK'] == true,
+      });
 
-      tasks[taskIndex] = {
-        ...tasks[taskIndex],
+      // Обновляем задачу
+      await taskRef.update({
         'status': 'completed',
-        'resultImageBase64': _base64Image,
+        'resultImageRef': imageDoc.id,
+        'hasResultImage': true,
         'completedBy': user?.uid,
         'completedByName': userName,
-        'completedAt': DateTime.now().toIso8601String(),
-        'hasResultImage': true,
+        'completedAt': now,
         'reviewedBy': null,
         'reviewedAt': null,
-      };
-
-      await FirebaseFirestore.instance
-          .collection(collectionName)
-          .doc(orderNumber)
-          .update({
-        'tasks': tasks,
-        'updatedAt': DateTime.now().toIso8601String(),
       });
 
       CustomSnackBar.showSuccess(
@@ -368,188 +246,68 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
             ? 'Фото отправлено на повторную проверку'
             : 'Задание отправлено на проверку',
       );
-
-      await Future.delayed(Duration(milliseconds: 300));
-
-      Navigator.pushReplacementNamed(context, '/Tasks', arguments: {
-        'orderNumber': orderNumber,
-        'collectionName': collectionName,
-        'screenTitle': screenTitle,
-      });
+      Navigator.of(context).pop();
     } catch (e) {
-      CustomSnackBar.showError(
-        context: context,
-        message: 'Ошибка: $e',
-      );
+      CustomSnackBar.showError(context: context, message: 'Ошибка: $e');
     } finally {
-      setState(() {
-        isLoading = false;
-      });
+      setState(() => isLoading = false);
     }
   }
 
-  void _showFullScreenImage(BuildContext context, String base64String, String title) {
-    try {
-      final bytes = base64.decode(base64String);
-
-      showDialog(
-        context: context,
-        builder: (context) {
-          return Dialog(
-            backgroundColor: Colors.black,
-            insetPadding: EdgeInsets.zero,
-            child: Container(
-              width: MediaQuery.of(context).size.width,
-              height: MediaQuery.of(context).size.height,
-              child: Column(
-                children: [
-                  Container(
-                    padding: EdgeInsets.all(16),
-                    color: Colors.black,
-                    child: Row(
-                      children: [
-                        Icon(Icons.photo, color: Colors.white, size: 20),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            title,
-                            style: TextStyle(
-                              fontFamily: 'GolosB',
-                              color: Colors.white,
-                              fontSize: 16,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        SizedBox(width: 8),
-                        GestureDetector(
-                          onTap: () => Navigator.of(context).pop(),
-                          child: Container(
-                            padding: EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.black54,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Icon(
-                              Icons.close,
-                              color: Colors.white,
-                              size: 24,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: InteractiveViewer(
-                      panEnabled: true,
-                      minScale: 0.1,
-                      maxScale: 5.0,
-                      boundaryMargin: EdgeInsets.all(20),
-                      child: Center(
-                        child: Image.memory(
-                          bytes,
-                          fit: BoxFit.contain,
-                        ),
-                      ),
-                    ),
-                  ),
-                  Container(
-                    padding: EdgeInsets.all(12),
-                    color: Colors.black54,
-                    child: Text(
-                      'Используйте жесты для масштабирования и перемещения',
-                      style: TextStyle(
-                        fontFamily: 'GolosR',
-                        color: Colors.white,
-                        fontSize: 12,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      );
-    } catch (e) {
-      CustomSnackBar.showError(
-        context: context,
-        message: 'Ошибка открытия изображения',
-      );
-    }
-  }
-
-  Widget _buildInteractiveImage(
-      BuildContext context,
-      String base64String,
-      String title,
-      Color color,
-      ) {
+  void _showSourceDialog() {
     final scale = getScaleFactor(context);
-
-    return GestureDetector(
-      onTap: () {
-        _showFullScreenImage(context, base64String, title);
-      },
-      child: Container(
-        width: double.infinity,
-        decoration: BoxDecoration(
-          border: Border.all(color: color),
-          borderRadius: BorderRadius.circular(10 * scale),
-        ),
-        child: Column(
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15 * scale)),
+        title: Text('Выберите источник фото', textAlign: TextAlign.center, style: TextStyle(fontFamily: 'GolosB', fontSize: 18 * scale)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              height: 300 * scale,
-              child: Image.memory(
-                base64.decode(base64String),
-                fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    height: 200 * scale,
-                    child: Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.error, color: Colors.red, size: 40 * scale),
-                          SizedBox(height: 10 * scale),
-                          Text(
-                            'Ошибка загрузки изображения',
-                            style: TextStyle(
-                              fontFamily: 'GolosR',
-                              color: Colors.red,
-                              fontSize: 14 * scale,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
+              width: double.infinity,
+              height: 50 * scale,
+              margin: EdgeInsets.only(bottom: 10 * scale),
+              child: ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _pickImage(ImageSource.camera);
                 },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.camera_alt, color: Colors.white, size: 20 * scale),
+                    SizedBox(width: 10 * scale),
+                    Text('Сделать снимок', style: TextStyle(fontSize: 16 * scale, fontFamily: 'GolosR', color: Colors.white)),
+                  ],
+                ),
               ),
             ),
             Container(
-              padding: EdgeInsets.all(8 * scale),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.zoom_in,
-                    color: color,
-                    size: 16 * scale,
-                  ),
-                  SizedBox(width: 5 * scale),
-                  Text(
-                    'Нажмите для приближения',
-                    style: TextStyle(
-                      fontFamily: 'GolosR',
-                      color: color,
-                      fontSize: 12 * scale,
-                    ),
-                  ),
-                ],
+              width: double.infinity,
+              height: 50 * scale,
+              child: OutlinedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _pickImage(ImageSource.gallery);
+                },
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: Colors.red, width: 2),
+                  backgroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.photo_library, color: Colors.red, size: 20 * scale),
+                    SizedBox(width: 10 * scale),
+                    Text('Выбрать из галереи', style: TextStyle(fontSize: 14 * scale, fontFamily: 'GolosR', color: Colors.red)),
+                  ],
+                ),
               ),
             ),
           ],
@@ -561,7 +319,7 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
   @override
   Widget build(BuildContext context) {
     final scale = getScaleFactor(context);
-    final hasOriginalImage = task['imageBase64'] != null && task['imageBase64'].isNotEmpty;
+    final hasOriginalImage = task['hasImage'] == true;
     final status = task['status'] ?? 'active';
     final isRejected = status == 'rejected';
 
@@ -572,11 +330,7 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Colors.white,
-              Colors.white,
-              Color(0xFFFEF2F2),
-            ],
+            colors: [Colors.white, Colors.white, Color(0xFFFEF2F2)],
           ),
         ),
         child: Column(
@@ -584,162 +338,24 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
             AppBar(
               title: Container(
                 width: MediaQuery.of(context).size.width * 0.7,
-                child: Text(
-                  'Задание $taskNumber - №$orderNumber',
-                  style: TextStyle(
-                    fontFamily: 'GolosB',
-                    color: Colors.black,
-                    fontSize: 16 * scale,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                ),
+                child: Text('Задание $taskNumber - №$orderNumber',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontFamily: 'GolosB', fontSize: 16 * scale, color: Colors.black)),
               ),
               backgroundColor: Colors.transparent,
               elevation: 0,
               iconTheme: IconThemeData(color: Colors.red),
               centerTitle: true,
             ),
-
-            if (userName != null)
-              Container(
-                padding: EdgeInsets.symmetric(
-                  horizontal: 20 * scale,
-                  vertical: 5 * scale,
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.person, color: Colors.grey, size: 16 * scale),
-                    SizedBox(width: 8 * scale),
-                    Text(
-                      'Исполнитель: $userName',
-                      style: TextStyle(
-                        fontFamily: 'GolosR',
-                        fontSize: 14 * scale,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
             Expanded(
               child: SingleChildScrollView(
                 padding: EdgeInsets.all(20 * scale),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      width: double.infinity,
-                      padding: EdgeInsets.all(12 * scale),
-                      margin: EdgeInsets.only(bottom: 20 * scale),
-                      decoration: BoxDecoration(
-                        color: _getStatusColor(status).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10 * scale),
-                        border: Border.all(color: _getStatusColor(status)),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            _getStatusIcon(status),
-                            color: _getStatusColor(status),
-                            size: 20 * scale,
-                          ),
-                          SizedBox(width: 8 * scale),
-                          Text(
-                            isRejected ? 'Требует доработки' : _getStatusText(status),
-                            style: TextStyle(
-                              fontSize: 16 * scale,
-                              fontFamily: 'GolosB',
-                              color: _getStatusColor(status),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    if (isRejected)
-                      Container(
-                        width: double.infinity,
-                        padding: EdgeInsets.all(16 * scale),
-                        margin: EdgeInsets.only(bottom: 20 * scale),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(10 * scale),
-                          border: Border.all(color: Colors.orange),
-                        ),
-                        child: Column(
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.info, color: Colors.orange, size: 20 * scale),
-                                SizedBox(width: 8 * scale),
-                                Text(
-                                  'Задание требует доработки',
-                                  style: TextStyle(
-                                    fontSize: 16 * scale,
-                                    fontFamily: 'GolosB',
-                                    color: Colors.orange,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            SizedBox(height: 8 * scale),
-                            Text(
-                              '${reviewerName ?? 'ИТР'} отклонил предыдущее фото. Сделайте новое фото результата, оно заменит предыдущее.',
-                              style: TextStyle(
-                                fontSize: 14 * scale,
-                                fontFamily: 'GolosR',
-                                color: Colors.black87,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                            SizedBox(height: 15 * scale),
-                            ElevatedButton(
-                              onPressed: () {
-                                Navigator.pushNamed(context, '/TaskPhotoScreen', arguments: {
-                                  'orderNumber': orderNumber,
-                                  'collectionName': collectionName,
-                                  'taskIndex': taskIndex,
-                                  'task': task,
-                                  'taskNumber': taskNumber,
-                                  'screenTitle': screenTitle,
-                                });
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.orange,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10 * scale)),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.refresh, color: Colors.white, size: 20 * scale),
-                                  SizedBox(width: 8 * scale),
-                                  Flexible(
-                                    child: Text('Переделать задание',
-                                        style: TextStyle(fontSize: 16 * scale, fontFamily: 'GolosB', color: Colors.white),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                    Text(
-                      'Описание задания:',
-                      style: TextStyle(
-                        fontSize: 18 * scale,
-                        fontFamily: 'GolosB',
-                        color: Colors.black,
-                      ),
-                    ),
+                    Text('Описание задания:', style: TextStyle(fontSize: 18 * scale, fontFamily: 'GolosB', color: Colors.black)),
                     SizedBox(height: 10 * scale),
                     Container(
                       width: double.infinity,
@@ -751,115 +367,36 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
                       ),
                       child: Text(
                         task['taskDescription'] ?? 'Описание отсутствует',
-                        style: TextStyle(
-                          fontSize: 16 * scale,
-                          fontFamily: 'GolosR',
-                          color: Colors.black87,
-                        ),
+                        style: TextStyle(fontSize: 16 * scale, fontFamily: 'GolosR', color: Colors.black87, height: 1.4),
                       ),
                     ),
                     SizedBox(height: 30 * scale),
-
                     if (hasOriginalImage) ...[
-                      Text(
-                        'Исходное фото:',
-                        style: TextStyle(
-                          fontSize: 18 * scale,
-                          fontFamily: 'GolosB',
-                          color: Colors.black,
-                        ),
-                      ),
+                      Text('Исходное фото:', style: TextStyle(fontSize: 18 * scale, fontFamily: 'GolosB', color: Colors.black)),
                       SizedBox(height: 10 * scale),
-                      _buildInteractiveImage(
-                        context,
-                        task['imageBase64'],
-                        'Исходное фото задания',
-                        Colors.blue,
-                      ),
-                      SizedBox(height: 20 * scale),
-                      Text(
-                        'Это исходное фото задания. Сделайте или выберите фото результата работы ниже.',
-                        style: TextStyle(
-                          fontFamily: 'GolosR',
-                          color: Colors.grey[600],
-                          fontSize: 14 * scale,
-                        ),
-                        textAlign: TextAlign.center,
+                      // Здесь нужно загрузить оригинальное фото через TaskImageLoader
+                      FutureBuilder<String?>(
+                        future: _loadOriginalImage(),
+                        builder: (context, snapshot) {
+                          if (snapshot.hasData && snapshot.data != null) {
+                            return _buildImagePreview(snapshot.data!, Colors.blue);
+                          }
+                          return Container(
+                            height: 200 * scale,
+                            child: Center(child: CircularProgressIndicator()),
+                          );
+                        },
                       ),
                       SizedBox(height: 30 * scale),
                     ],
-
-                    Text(
-                      'Фото результата:',
-                      style: TextStyle(
-                        fontSize: 18 * scale,
-                        fontFamily: 'GolosB',
-                        color: Colors.black,
-                      ),
-                    ),
+                    Text('Фото результата:', style: TextStyle(fontSize: 18 * scale, fontFamily: 'GolosB', color: Colors.black)),
                     SizedBox(height: 10 * scale),
-
                     if (_base64Image != null) ...[
-                      Container(
-                        padding: EdgeInsets.all(12 * scale),
-                        decoration: BoxDecoration(
-                          color: Colors.green[50],
-                          borderRadius: BorderRadius.circular(15 * scale),
-                          border: Border.all(color: Colors.green),
-                        ),
-                        child: Column(
-                          children: [
-                            Row(
-                              children: [
-                                Icon(Icons.check_circle, color: Colors.green, size: 16 * scale),
-                                SizedBox(width: 5 * scale),
-                                Text(
-                                  isRejected ? 'Новое фото для доработки' : 'Ваше фото результата',
-                                  style: TextStyle(
-                                    fontFamily: 'GolosB',
-                                    color: Colors.green,
-                                    fontSize: 14 * scale,
-                                  ),
-                                ),
-                                Spacer(),
-                                GestureDetector(
-                                  onTap: _removeImage,
-                                  child: Container(
-                                    padding: EdgeInsets.all(6 * scale),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(20 * scale),
-                                    ),
-                                    child: Icon(
-                                      Icons.close,
-                                      color: Colors.grey,
-                                      size: 18 * scale,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            SizedBox(height: 10 * scale),
-                            _buildInteractiveImage(
-                              context,
-                              _base64Image!,
-                              isRejected ? 'Новое фото результата' : 'Фото результата работы',
-                              Colors.green,
-                            ),
-                          ],
-                        ),
-                      ),
+                      _buildImagePreview(_base64Image!, Colors.green),
                       SizedBox(height: 10 * scale),
-                      Text(
-                        isRejected
-                            ? 'Новое фото готово к отправке. Нажмите на фото для приближения.'
-                            : 'Фото прикреплено. Нажмите на фото для приближения или кнопку ниже для отправки на проверку.',
-                        style: TextStyle(
-                          fontFamily: 'GolosR',
-                          color: Colors.green,
-                          fontSize: 14 * scale,
-                        ),
-                        textAlign: TextAlign.center,
+                      Center(
+                        child: Text('Нажмите на фото для приближения',
+                            style: TextStyle(fontFamily: 'GolosR', color: Colors.green, fontSize: 12 * scale)),
                       ),
                     ] else ...[
                       Container(
@@ -872,92 +409,50 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
                         ),
                         child: Column(
                           children: [
-                            Icon(
-                              Icons.photo_camera,
-                              color: Colors.grey,
-                              size: 50 * scale,
-                            ),
+                            Icon(Icons.photo_camera, color: Colors.grey, size: 50 * scale),
                             SizedBox(height: 10 * scale),
-                            Text(
-                              'Фото результата не прикреплено',
-                              style: TextStyle(
-                                fontFamily: 'GolosR',
-                                color: Colors.grey,
-                                fontSize: 16 * scale,
-                              ),
-                            ),
-                            SizedBox(height: 10 * scale),
-                            Text(
-                              isRejected
-                                  ? 'Сделайте новое фото результата для повторной проверки'
-                                  : 'Сделайте снимок или выберите фото из галереи',
-                              style: TextStyle(
-                                fontFamily: 'GolosR',
-                                color: Colors.grey,
-                                fontSize: 12 * scale,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
+                            Text('Фото результата не прикреплено',
+                                style: TextStyle(fontFamily: 'GolosR', color: Colors.grey, fontSize: 16 * scale)),
                           ],
                         ),
                       ),
                     ],
-
                     SizedBox(height: 30 * scale),
-
                     Center(
                       child: Container(
                         width: double.infinity,
                         height: 45 * scale,
                         margin: EdgeInsets.symmetric(horizontal: 20 * scale),
                         child: ElevatedButton(
-                          onPressed: _showImageSourceDialog,
+                          onPressed: _showSourceDialog,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.red,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(15 * scale),
-                            ),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15 * scale)),
                           ),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Icon(Icons.add_photo_alternate, color: Colors.white, size: 20 * scale),
                               SizedBox(width: 10 * scale),
-                              Text(
-                                _base64Image != null ? 'Заменить фото' : 'Прикрепить фото',
-                                style: TextStyle(
-                                  fontSize: 14 * scale,
-                                  fontFamily: 'GolosR',
-                                  color: Colors.white,
-                                ),
-                              ),
+                              Text(_base64Image != null ? 'Заменить фото' : 'Прикрепить фото',
+                                  style: TextStyle(fontSize: 14 * scale, fontFamily: 'GolosR', color: Colors.white)),
                             ],
                           ),
                         ),
                       ),
                     ),
-
-                    SizedBox(height: 10 * scale),
-                    Center(
-                      child: Text(
-                        'Нажмите для выбора источника фото',
-                        style: TextStyle(
-                          fontFamily: 'GolosR',
-                          color: Colors.grey,
-                          fontSize: 12 * scale,
-                        ),
-                      ),
-                    ),
-
-                    SizedBox(height: 20 * scale),
-
+                    SizedBox(height: 30 * scale),
                     Center(
                       child: Container(
                         width: double.infinity,
                         height: 45 * scale,
                         margin: EdgeInsets.symmetric(horizontal: 20 * scale),
                         child: ElevatedButton(
-                          onPressed: _base64Image != null && !isLoading ? _markTaskCompleted : null,
+                          onPressed: _base64Image != null && !isLoading ? _submitWork : null,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _base64Image != null ? Colors.green : Colors.grey,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15 * scale)),
+                          ),
                           child: isLoading
                               ? CircularProgressIndicator(color: Colors.white)
                               : Row(
@@ -966,48 +461,120 @@ class _TaskPhotoScreenState extends State<TaskPhotoScreen> {
                               Icon(Icons.check, color: Colors.white, size: 20 * scale),
                               SizedBox(width: 10 * scale),
                               Flexible(
-                                child: Text(
-                                  isRejected ? 'Отправить повторно' : 'Отправить на проверку',
-                                  style: TextStyle(
-                                    fontSize: 14 * scale,
-                                    fontFamily: 'GolosB',
-                                    color: Colors.white,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                                child: Text(isRejected ? 'Отправить повторно' : 'Отправить на проверку',
+                                    style: TextStyle(fontSize: 14 * scale, fontFamily: 'GolosB', color: Colors.white),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis),
                               ),
                             ],
                           ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _base64Image != null ? Colors.green : Colors.grey,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(15 * scale),
-                            ),
-                          ),
                         ),
                       ),
                     ),
-
-                    SizedBox(height: 10 * scale),
-                    Center(
-                      child: Text(
-                        'Кнопка станет активной после прикрепления фото',
-                        style: TextStyle(
-                          fontFamily: 'GolosR',
-                          color: Colors.grey,
-                          fontSize: 12 * scale,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-
                     SizedBox(height: 40 * scale),
                   ],
                 ),
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Future<String?> _loadOriginalImage() async {
+    if (task['imageRef'] == null) return null;
+    final doc = await FirebaseFirestore.instance
+        .collection('task_images')
+        .doc(task['imageRef'])
+        .get();
+    return doc.data()?['imageBase64'];
+  }
+
+  Widget _buildImagePreview(String base64String, Color color) {
+    final scale = getScaleFactor(context);
+    return GestureDetector(
+      onTap: () => _showFullScreen(base64String),
+      child: Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          border: Border.all(color: color, width: 2),
+          borderRadius: BorderRadius.circular(12 * scale),
+        ),
+        child: Column(
+          children: [
+            Container(
+              constraints: BoxConstraints(maxHeight: 300 * scale, minHeight: 200 * scale),
+              child: Image.memory(
+                base64.decode(base64String),
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => Center(child: Icon(Icons.error, color: Colors.red, size: 40 * scale)),
+              ),
+            ),
+            Container(
+              padding: EdgeInsets.all(8 * scale),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.zoom_in, color: color, size: 16 * scale),
+                  SizedBox(width: 6 * scale),
+                  Text('Нажмите для приближения',
+                      style: TextStyle(fontFamily: 'GolosR', color: color, fontSize: 12 * scale)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showFullScreen(String base64String) {
+    final bytes = base64.decode(base64String);
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        backgroundColor: Colors.black,
+        insetPadding: EdgeInsets.zero,
+        child: Container(
+          width: MediaQuery.of(context).size.width,
+          height: MediaQuery.of(context).size.height,
+          child: Column(
+            children: [
+              Container(
+                padding: EdgeInsets.all(16),
+                color: Colors.black,
+                child: Row(
+                  children: [
+                    Icon(Icons.photo, color: Colors.white, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text('Фото',
+                          style: TextStyle(fontFamily: 'GolosB', color: Colors.white, fontSize: 16),
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                    GestureDetector(
+                      onTap: () => Navigator.of(context).pop(),
+                      child: Container(
+                        padding: EdgeInsets.all(8),
+                        decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
+                        child: Icon(Icons.close, color: Colors.white, size: 24),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: InteractiveViewer(
+                  panEnabled: true,
+                  minScale: 0.1,
+                  maxScale: 5.0,
+                  boundaryMargin: EdgeInsets.all(20),
+                  child: Center(child: Image.memory(bytes, fit: BoxFit.contain)),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -1,3 +1,4 @@
+// ipk_worker_task_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -5,12 +6,45 @@ import 'dart:io';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:psm/custom_snackbar.dart';
+import 'package:image/image.dart' as img;
+import 'dart:typed_data'; // Добавьте в начало файла
 
-/// ИТР выполняет ИПК-задание (только фото + статус «completed»)
+Future<List<int>> _compressImage(List<int> bytes, {required int maxSizeKB}) async {
+  if (bytes.length <= maxSizeKB * 1024) {
+    return bytes;
+  }
+
+  // 🔴 ИСПРАВЛЕНИЕ: Преобразуем в Uint8List
+  final Uint8List uint8Bytes = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+  img.Image? image = img.decodeImage(uint8Bytes);
+
+  if (image == null) return bytes;
+
+  const int maxDimension = 1200;
+  if (image.width > maxDimension || image.height > maxDimension) {
+    if (image.width > image.height) {
+      image = img.copyResize(image, width: maxDimension);
+    } else {
+      image = img.copyResize(image, height: maxDimension);
+    }
+  }
+
+  int quality = 85;
+  List<int> compressed = img.encodeJpg(image, quality: quality);
+
+  while (compressed.length > maxSizeKB * 1024 && quality > 30) {
+    quality -= 10;
+    compressed = img.encodeJpg(image, quality: quality);
+  }
+
+  return compressed;
+}
+
+/// ИТМ выполняет ИПК-задание (только фото + статус «completed»)
 class IPKWorkerTaskScreen extends StatefulWidget {
   final String orderNumber;
   final String collectionName;
-  final int taskIndex;
+  final String taskId;
   final Map<String, dynamic> task;
   final int taskNumber;
 
@@ -18,7 +52,7 @@ class IPKWorkerTaskScreen extends StatefulWidget {
     Key? key,
     required this.orderNumber,
     required this.collectionName,
-    required this.taskIndex,
+    required this.taskId,
     required this.task,
     required this.taskNumber,
   }) : super(key: key);
@@ -31,6 +65,7 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
   final ImagePicker _picker = ImagePicker();
   String? _base64Image;
   bool isLoading = false;
+  String? originalImageBase64;
 
   double getScaleFactor(BuildContext context) {
     final d = MediaQuery.of(context).size.shortestSide;
@@ -47,11 +82,79 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
   }
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (widget.task['resultImageBase64'] != null && widget.task['resultImageBase64'].isNotEmpty) {
-      _base64Image = widget.task['resultImageBase64'];
+  void initState() {
+    super.initState();
+    _loadOriginalImage();
+    _loadExistingResult();
+  }
+
+  /// Загружаем исходное фото задания
+  Future<void> _loadOriginalImage() async {
+    final imageRef = widget.task['imageRef'];
+    if (imageRef == null) return;
+
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('task_images')
+          .doc(imageRef)
+          .get();
+
+      if (doc.exists && mounted) {
+        setState(() {
+          originalImageBase64 = doc.data()?['imageBase64'];
+        });
+      }
+    } catch (e) {
+      print('Ошибка загрузки исходного фото: $e');
     }
+  }
+
+  /// Загружаем существующее фото результата (если задача на доработке)
+  Future<void> _loadExistingResult() async {
+    final resultRef = widget.task['resultImageRef'];
+    if (resultRef == null) return;
+
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('task_images')
+          .doc(resultRef)
+          .get();
+
+      if (doc.exists && mounted) {
+        setState(() {
+          _base64Image = doc.data()?['imageBase64'];
+        });
+      }
+    } catch (e) {
+      print('Ошибка загрузки фото результата: $e');
+    }
+  }
+
+  /// Сжатие изображения до maxSizeKB
+  Future<List<int>> _compressImage(List<int> bytes, {required int maxSizeKB}) async {
+    if (bytes.length <= maxSizeKB * 1024) return bytes;
+
+    img.Image? image = img.decodeImage(Uint8List.fromList(bytes));
+    if (image == null) return bytes;
+
+    const int maxDimension = 1200;
+    if (image.width > maxDimension || image.height > maxDimension) {
+      if (image.width > image.height) {
+        image = img.copyResize(image, width: maxDimension);
+      } else {
+        image = img.copyResize(image, height: maxDimension);
+      }
+    }
+
+    int quality = 85;
+    List<int> compressed = img.encodeJpg(image, quality: quality);
+
+    while (compressed.length > maxSizeKB * 1024 && quality > 30) {
+      quality -= 10;
+      compressed = img.encodeJpg(image, quality: quality);
+    }
+
+    return compressed;
   }
 
   Future<void> _pickImage(ImageSource source) async {
@@ -63,13 +166,23 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
         imageQuality: 80,
       );
       if (image == null) return;
+
       final bytes = await File(image.path).readAsBytes();
       if (bytes.length > 5 * 1024 * 1024) {
         CustomSnackBar.showWarning(context: context, message: 'Фото > 5 МБ');
         return;
       }
+
+      final compressedBytes = await _compressImage(bytes, maxSizeKB: 500);
+      final base64 = base64Encode(compressedBytes);
+
+      if (base64.length > 700000) {
+        CustomSnackBar.showWarning(context: context, message: 'Фото слишком детализированное');
+        return;
+      }
+
       setState(() {
-        _base64Image = base64Encode(bytes);
+        _base64Image = base64;
       });
       CustomSnackBar.showSuccess(context: context, message: 'Фото загружено');
     } catch (e) {
@@ -82,6 +195,7 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
     CustomSnackBar.showInfo(context: context, message: 'Фото удалено');
   }
 
+  /// 🔴 ОБНОВЛЁННЫЙ метод отправки работы
   Future<void> _submitWork() async {
     if (_base64Image == null) {
       CustomSnackBar.showWarning(context: context, message: 'Прикрепите фото');
@@ -90,26 +204,52 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
     setState(() => isLoading = true);
     try {
       final user = FirebaseAuth.instance.currentUser;
-      final doc = FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber);
-      final snap = await doc.get();
-      if (!snap.exists) throw Exception('Заказ не найден');
 
-      final tasks = List.from(snap.data()!['tasks']);
-      tasks[widget.taskIndex] = {
-        ...tasks[widget.taskIndex],
+      // Ссылка на задачу в подколлекции
+      final taskRef = FirebaseFirestore.instance
+          .collection(widget.collectionName)
+          .doc(widget.orderNumber)
+          .collection('tasks')
+          .doc(widget.taskId);
+
+      // Проверяем существование задачи
+      final taskDoc = await taskRef.get();
+      if (!taskDoc.exists) throw Exception('Задание не найдено');
+
+      // Удаляем старое фото результата если есть
+      final oldResultRef = widget.task['resultImageRef'];
+      if (oldResultRef != null) {
+        await FirebaseFirestore.instance.collection('task_images').doc(oldResultRef).delete();
+      }
+
+      // Сохраняем новое фото результата
+      final now = DateTime.now().toIso8601String();
+      final imageDoc = await FirebaseFirestore.instance.collection('task_images').add({
+        'imageBase64': _base64Image,
+        'orderNumber': widget.orderNumber,
+        'collectionName': widget.collectionName,
+        'taskNumber': widget.taskNumber,
+        'createdBy': user?.uid,
+        'createdAt': now,
+        'taskType': 'result',
+        'isIPK': true,
+      });
+
+      // Обновляем задачу
+      await taskRef.update({
         'status': 'completed',
-        'resultImageBase64': _base64Image,
-        'completedBy': user?.uid,
-        'completedByName': user?.displayName ?? 'ИТР',
-        'completedAt': DateTime.now().toIso8601String(),
+        'resultImageRef': imageDoc.id,
         'hasResultImage': true,
+        'completedBy': user?.uid,
+        'completedAt': now,
         'reviewedBy': null,
         'reviewedAt': null,
-      };
+      });
 
-      await doc.update({'tasks': tasks, 'updatedAt': DateTime.now().toIso8601String()});
-
-      CustomSnackBar.showSuccess(context: context, message: 'Задание выполнено и отправлено на проверку');
+      CustomSnackBar.showSuccess(
+        context: context,
+        message: 'Задание выполнено и отправлено на проверку',
+      );
       Navigator.of(context).pop();
     } catch (e) {
       CustomSnackBar.showError(context: context, message: 'Ошибка: $e');
@@ -118,8 +258,28 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
     }
   }
 
-  Widget _buildImage(String base64String, String title, Color color) {
+  Widget _buildImage(String? base64String, String title, Color color) {
     final scale = getScaleFactor(context);
+    if (base64String == null) {
+      return Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(20 * scale),
+        decoration: BoxDecoration(
+          color: Colors.grey[50],
+          borderRadius: BorderRadius.circular(15 * scale),
+          border: Border.all(color: Colors.grey[300]!),
+        ),
+        child: Column(
+          children: [
+            Icon(Icons.photo_library, color: Colors.grey, size: 50 * scale),
+            SizedBox(height: 10 * scale),
+            Text('Фото не прикреплено',
+                style: TextStyle(fontFamily: 'GolosR', color: Colors.grey, fontSize: 14 * scale)),
+          ],
+        ),
+      );
+    }
+
     return GestureDetector(
       onTap: () => _showFullScreen(base64String, title),
       child: Container(
@@ -203,7 +363,7 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
               Container(
                 padding: EdgeInsets.all(12),
                 color: Colors.black54,
-                child: Text('Используйте жесты для масштабирования и перемещения',
+                child: Text('Используйте жесты для масштабирования',
                     style: TextStyle(fontFamily: 'GolosR', color: Colors.white, fontSize: 12),
                     textAlign: TextAlign.center),
               ),
@@ -279,6 +439,8 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
   @override
   Widget build(BuildContext context) {
     final scale = getScaleFactor(context);
+    final status = widget.task['status'] ?? 'active';
+
     return Scaffold(
       backgroundColor: Colors.white,
       body: Container(
@@ -311,6 +473,37 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Статус задачи
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(12 * scale),
+                      margin: EdgeInsets.only(bottom: 20 * scale),
+                      decoration: BoxDecoration(
+                        color: status == 'rejected' ? Colors.orange.withOpacity(0.1) : Colors.blue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10 * scale),
+                        border: Border.all(color: status == 'rejected' ? Colors.orange : Colors.blue),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            status == 'rejected' ? Icons.warning : Icons.info,
+                            color: status == 'rejected' ? Colors.orange : Colors.blue,
+                            size: 20 * scale,
+                          ),
+                          SizedBox(width: 8 * scale),
+                          Text(
+                            status == 'rejected' ? 'Требует доработки' : 'Активно',
+                            style: TextStyle(
+                              fontSize: 16 * scale,
+                              fontFamily: 'GolosB',
+                              color: status == 'rejected' ? Colors.orange : Colors.blue,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
                     Text('Описание задания:', style: TextStyle(fontSize: 18 * scale, fontFamily: 'GolosB', color: Colors.black)),
                     SizedBox(height: 10 * scale),
                     Container(
@@ -329,12 +522,15 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
                     SizedBox(height: 30 * scale),
 
                     // Исходное фото
-                    if (widget.task['imageBase64'] != null && widget.task['imageBase64'].isNotEmpty) ...[
-                      Text('Исходное фото:', style: TextStyle(fontSize: 18 * scale, fontFamily: 'GolosB', color: Colors.black)),
-                      SizedBox(height: 10 * scale),
-                      _buildImage(widget.task['imageBase64']!, 'Исходное фото', Colors.blue),
-                      SizedBox(height: 30 * scale),
-                    ],
+                    Text('Исходное фото:', style: TextStyle(fontSize: 18 * scale, fontFamily: 'GolosB', color: Colors.black)),
+                    SizedBox(height: 10 * scale),
+                    originalImageBase64 != null
+                        ? _buildImage(originalImageBase64, 'Исходное фото', Colors.blue)
+                        : Container(
+                      height: 200 * scale,
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
+                    SizedBox(height: 30 * scale),
 
                     // Фото результата
                     Text('Фото результата:', style: TextStyle(fontSize: 18 * scale, fontFamily: 'GolosB', color: Colors.black)),
@@ -370,15 +566,11 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
                               ],
                             ),
                             SizedBox(height: 10 * scale),
-                            _buildImage(_base64Image!, 'Ваше фото', Colors.green),
+                            _buildImage(_base64Image, 'Ваше фото', Colors.green),
                           ],
                         ),
                       ),
-                      SizedBox(height: 10 * scale),
-                      Text('Нажмите на фото для приближения',
-                          style: TextStyle(fontFamily: 'GolosR', color: Colors.green, fontSize: 12 * scale),
-                          textAlign: TextAlign.center),
-                    ] else
+                    ] else ...[
                       Container(
                         width: double.infinity,
                         padding: EdgeInsets.all(20 * scale),
@@ -400,9 +592,10 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
                           ],
                         ),
                       ),
+                    ],
                     SizedBox(height: 30 * scale),
 
-                    // Кнопки выбора источника
+                    // Кнопка прикрепления фото
                     Center(
                       child: Container(
                         width: double.infinity,
@@ -426,14 +619,9 @@ class _IPKWorkerTaskScreenState extends State<IPKWorkerTaskScreen> {
                         ),
                       ),
                     ),
-                    SizedBox(height: 10 * scale),
-                    Center(
-                      child: Text('Нажмите для выбора источника фото',
-                          style: TextStyle(fontFamily: 'GolosR', color: Colors.grey, fontSize: 12 * scale)),
-                    ),
                     SizedBox(height: 30 * scale),
 
-                    // Кнопка «Выполнить»
+                    // Кнопка отправки
                     Center(
                       child: Container(
                         width: double.infinity,

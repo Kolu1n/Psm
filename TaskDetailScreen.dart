@@ -1,15 +1,17 @@
-import 'package:flutter/material.dart';
+// TaskDetailScreen.dart
 import 'dart:convert';
+import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:psm/custom_snackbar.dart';
+import 'package:psm/pages/task_image_loader.dart';
 
 class TaskDetailScreen extends StatefulWidget {
   final Map<String, dynamic> task;
   final int taskNumber;
   final String orderNumber;
   final String collectionName;
-  final int taskIndex;
+  final String taskId;
 
   const TaskDetailScreen({
     Key? key,
@@ -17,7 +19,7 @@ class TaskDetailScreen extends StatefulWidget {
     required this.taskNumber,
     required this.orderNumber,
     required this.collectionName,
-    required this.taskIndex,
+    required this.taskId,
   }) : super(key: key);
 
   @override
@@ -30,8 +32,8 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
   String creatorName = 'Загрузка...';
   String executorName = 'Загрузка...';
   String reviewerName = 'Загрузка...';
-
-  late final bool isIPK;
+  String? originalImageBase64;
+  String? resultImageBase64;
 
   double getScaleFactor(BuildContext context) {
     final d = MediaQuery.of(context).size.shortestSide;
@@ -50,9 +52,20 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
   @override
   void initState() {
     super.initState();
-    isIPK = widget.task['isIPK'] == true;
     _loadUserSpec();
     _loadUserNames();
+    _loadImages();
+  }
+
+  Future<void> _loadImages() async {
+    // Загружаем изображения через TaskImageLoader
+    if (widget.task['imageRef'] != null) {
+      originalImageBase64 = await TaskImageLoader.getImageBase64(widget.task['imageRef']);
+    }
+    if (widget.task['resultImageRef'] != null) {
+      resultImageBase64 = await TaskImageLoader.getImageBase64(widget.task['resultImageRef']);
+    }
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadUserSpec() async {
@@ -136,7 +149,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
       case 'completed':
         return 'Выполнено (ожидает проверки)';
       case 'approved':
-        return 'Подтверждено ИТР';
+        return 'Подтверждено';
       case 'rejected':
         return 'Отклонено (требует доработки)';
       default:
@@ -144,19 +157,24 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     }
   }
 
+  // 🔴 ОБНОВЛЁННЫЙ метод проверки задачи
   Future<void> _reviewTask(bool approved) async {
     if (isLoading) return;
     setState(() => isLoading = true);
     try {
       final user = FirebaseAuth.instance.currentUser;
-      final orderDoc = await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).get();
-      if (!orderDoc.exists) throw Exception('Заказ не найден');
-      final orderData = orderDoc.data()!;
-      final tasks = List.from(orderData['tasks']);
-      if (widget.taskIndex >= tasks.length) throw Exception('Задание не найдено');
+      final taskRef = FirebaseFirestore.instance
+          .collection(widget.collectionName)
+          .doc(widget.orderNumber)
+          .collection('tasks')
+          .doc(widget.taskId);
 
-      final bool isIPK = tasks[widget.taskIndex]['isIPK'] == true;
-      final String? createdBy = tasks[widget.taskIndex]['createdBy'];
+      final taskDoc = await taskRef.get();
+      if (!taskDoc.exists) throw Exception('Задание не найдено');
+
+      final taskData = taskDoc.data()!;
+      final bool isIPK = taskData['isIPK'] == true;
+      final String? createdBy = taskData['createdBy'];
 
       // ✅ ИПК может проверять ТОЛЬКО свои задания
       if (userSpec == 5 && isIPK && createdBy != user?.uid) {
@@ -165,40 +183,50 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
         return;
       }
 
-      // ✅ ИТР не может проверять задания ИПК
+      // ✅ ИТМ не может проверять задания ИПК
       if (userSpec == 4 && isIPK) {
-        CustomSnackBar.showWarning(context: context, message: 'ИТР не может проверять задания ИПК');
+        CustomSnackBar.showWarning(context: context, message: 'ИТМ не может проверять задания ИПК');
         setState(() => isLoading = false);
         return;
       }
 
       if (approved) {
-        tasks.removeAt(widget.taskIndex);
-        for (int i = 0; i < tasks.length; i++) {
-          tasks[i]['taskNumber'] = i + 1;
-        }
-        await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).update({
-          'tasks': tasks,
-          'updatedAt': DateTime.now().toIso8601String(),
-        });
-        await _moveTaskToCompleted();
-        if (tasks.isEmpty) {
+        // Удаляем задачу и переносим в completed_tasks
+        await taskRef.delete();
+        await _moveTaskToCompleted(taskData);
+
+        // Проверяем оставшиеся задачи
+        final remaining = await FirebaseFirestore.instance
+            .collection(widget.collectionName)
+            .doc(widget.orderNumber)
+            .collection('tasks')
+            .get();
+
+        final hasIPK = remaining.docs.any((d) => d.data()['isIPK'] == true);
+
+        if (remaining.docs.isEmpty) {
           await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).delete();
+          CustomSnackBar.showSuccess(
+            context: context,
+            message: 'Задание подтверждено и заказ завершён',
+          );
+        } else {
+          await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).update({
+            'taskCount': remaining.docs.length,
+            'hasIPKTask': hasIPK,
+            'updatedAt': DateTime.now().toIso8601String(),
+          });
+          CustomSnackBar.showSuccess(
+            context: context,
+            message: 'Задание подтверждено и перенесено в завершённые',
+          );
         }
-        CustomSnackBar.showSuccess(
-          context: context,
-          message: tasks.isEmpty ? 'Задание подтверждено и заказ завершен' : 'Задание подтверждено и перенесено в завершенные',
-        );
       } else {
-        tasks[widget.taskIndex] = {
-          ...tasks[widget.taskIndex],
+        // Отклоняем задачу
+        await taskRef.update({
           'status': 'rejected',
           'reviewedBy': user?.uid,
           'reviewedAt': DateTime.now().toIso8601String(),
-        };
-        await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).update({
-          'tasks': tasks,
-          'updatedAt': DateTime.now().toIso8601String(),
         });
         CustomSnackBar.showWarning(context: context, message: 'Задание отправлено на доработку');
       }
@@ -210,13 +238,13 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     }
   }
 
-  Future<void> _moveTaskToCompleted() async {
+  Future<void> _moveTaskToCompleted(Map<String, dynamic> taskData) async {
     try {
       final user = FirebaseAuth.instance.currentUser;
       final completedTaskData = {
         'originalOrderNumber': widget.orderNumber,
         'originalCollection': widget.collectionName,
-        'task': widget.task,
+        'task': taskData,
         'taskNumber': widget.taskNumber,
         'approvedBy': user?.uid,
         'approvedAt': DateTime.now().toIso8601String(),
@@ -224,7 +252,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
       };
       await FirebaseFirestore.instance.collection('completed_tasks').add(completedTaskData);
     } catch (e) {
-      print('Ошибка при переносе задания в завершенные: $e');
+      print('Ошибка при переносе задания в завершённые: $e');
     }
   }
 
@@ -233,10 +261,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     if (user != null) {
       final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
       if (doc.exists) {
-        return doc.data()?['displayName'] ?? 'ИТР';
+        return doc.data()?['displayName'] ?? 'ИТМ';
       }
     }
-    return 'ИТР';
+    return 'ИТМ';
   }
 
   Future<void> _confirmDeleteTask() async {
@@ -275,69 +303,91 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
 
   Future<void> _deleteTask() async {
     try {
-      final orderDoc = await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).get();
-      if (!orderDoc.exists) throw Exception('Заказ не найден');
-      final orderData = orderDoc.data()!;
-      final tasks = List.from(orderData['tasks']);
-      if (widget.taskIndex >= tasks.length) throw Exception('Задание не найдено');
-
-      final bool isIPK = tasks[widget.taskIndex]['isIPK'] == true;
-      final String status = tasks[widget.taskIndex]['status'] ?? 'active';
+      final bool isIPK = widget.task['isIPK'] == true;
+      final String status = widget.task['status'] ?? 'active';
 
       // Проверка прав
       if (isIPK && userSpec != 5) {
-        CustomSnackBar.showWarning(context: context, message: 'ИПК-задания нельзя удалять');
+        CustomSnackBar.showWarning(context: context, message: 'ИПК-задания может удалять только ИПК');
         return;
       }
 
-      // ИПК может удалять свои задания, даже если они выполнены
+      if (!isIPK && userSpec != 4) {
+        CustomSnackBar.showWarning(context: context, message: 'У вас нет прав на удаление');
+        return;
+      }
+
+      // ИПК может удалять свои выполненные задания
       if ((status == 'completed' || status == 'approved') && !(isIPK && userSpec == 5)) {
-        CustomSnackBar.showWarning(context: context, message: 'Нельзя удалить завершенное задание');
+        CustomSnackBar.showWarning(context: context, message: 'Нельзя удалить завершённое задание');
         return;
       }
 
-      tasks.removeAt(widget.taskIndex);
-      for (int i = 0; i < tasks.length; i++) {
-        tasks[i]['taskNumber'] = i + 1;
+      final orderRef = FirebaseFirestore.instance
+          .collection(widget.collectionName)
+          .doc(widget.orderNumber);
+
+      // Удаляем изображения
+      final imageRef = widget.task['imageRef'];
+      final resultImageRef = widget.task['resultImageRef'];
+
+      if (imageRef != null) {
+        await FirebaseFirestore.instance.collection('task_images').doc(imageRef).delete();
+      }
+      if (resultImageRef != null) {
+        await FirebaseFirestore.instance.collection('task_images').doc(resultImageRef).delete();
       }
 
-      // Проверяем, остались ли ИПК-задания
-      final bool stillHasIPK = tasks.any((t) => t['isIPK'] == true);
+      // Удаляем задачу
+      await orderRef.collection('tasks').doc(widget.taskId).delete();
 
-      await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).update({
-        'tasks': tasks,
-        'updatedAt': DateTime.now().toIso8601String(),
-        'hasIPKTask': stillHasIPK,
-      });
+      // Перенумеровываем
+      final remaining = await orderRef.collection('tasks').orderBy('taskNumber').get();
+      final batch = FirebaseFirestore.instance.batch();
+      for (int i = 0; i < remaining.docs.length; i++) {
+        final doc = remaining.docs[i];
+        final newNum = i + 1;
+        if (doc.data()['taskNumber'] != newNum) {
+          batch.update(doc.reference, {'taskNumber': newNum});
+        }
+      }
+      await batch.commit();
+
+      final hasIPK = remaining.docs.any((d) => d.data()['isIPK'] == true);
+
+      if (remaining.docs.isEmpty) {
+        await orderRef.delete();
+        CustomSnackBar.showInfo(context: context, message: 'Все задания удалены. Заказ закрыт.');
+      } else {
+        await orderRef.update({
+          'taskCount': remaining.docs.length,
+          'hasIPKTask': hasIPK,
+          'updatedAt': DateTime.now().toIso8601String(),
+        });
+      }
 
       CustomSnackBar.showSuccess(context: context, message: 'Задание №${widget.taskNumber} удалено');
-      if (tasks.isEmpty) {
-        await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).delete();
-        CustomSnackBar.showInfo(context: context, message: 'Все задания удалены. Заказ закрыт.');
-      }
       Navigator.of(context).pop();
     } catch (e) {
       CustomSnackBar.showError(context: context, message: 'Ошибка удаления задания: $e');
     }
   }
 
-  // ИСПРАВЛЕННЫЙ МЕТОД: Проверка прав для показа кнопок проверки
   Widget _buildReviewButtons(BuildContext context) {
     final scale = getScaleFactor(context);
     final status = widget.task['status'] ?? 'active';
     final bool isIPK = widget.task['isIPK'] == true;
-    final String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
-    final String? createdBy = widget.task['createdBy'];
 
-    // Показываем кнопки только выполненным заданиям
     if (status != 'completed') return const SizedBox.shrink();
 
-    // ИТР может проверять ВСЕ задания, КРОМЕ заданий ИПК
+    // ИТМ может проверять ВСЕ задания, КРОМЕ заданий ИПК
     if (userSpec == 4 && !isIPK) {
       return _buildButtonContainer();
     }
 
     // ИПК может проверять ТОЛЬКО свои задания
+    final String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final String? createdBy = widget.task['createdBy'];
     if (userSpec == 5 && isIPK && createdBy == currentUserId) {
       return _buildButtonContainer();
     }
@@ -379,7 +429,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                         Icon(Icons.check, color: Colors.white, size: 20 * scale),
                         SizedBox(width: 8 * scale),
                         Flexible(
-                          child: Text('Подтвердить выполнение',
+                          child: Text('Подтвердить',
                               style: TextStyle(fontSize: 14 * scale, fontFamily: 'GolosB', color: Colors.white),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis),
@@ -407,7 +457,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                         Icon(Icons.close, color: Colors.red, size: 20 * scale),
                         SizedBox(width: 8 * scale),
                         Flexible(
-                          child: Text('Отправить на доработку',
+                          child: Text('На доработку',
                               style: TextStyle(fontSize: 14 * scale, fontFamily: 'GolosB', color: Colors.red),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis),
@@ -419,10 +469,6 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
               ),
             ],
           ),
-          SizedBox(height: 10 * scale),
-          Text('При подтверждении задание будет перенесено в завершенные',
-              style: TextStyle(fontFamily: 'GolosR', color: Colors.grey[600], fontSize: 12 * scale),
-              textAlign: TextAlign.center),
         ],
       ),
     );
@@ -432,13 +478,8 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     final scale = getScaleFactor(context);
     final bool isIPK = widget.task['isIPK'] == true;
 
-    // Скрываем кнопку удаления для неавторизованных
     if (userSpec != 4 && userSpec != 5) return const SizedBox.shrink();
-
-    // ИТР не может удалять ИПК-задания
     if (isIPK && userSpec == 4) return const SizedBox.shrink();
-
-    // ИПК не может удалять задания ИТР
     if (!isIPK && userSpec == 5) return const SizedBox.shrink();
 
     return GestureDetector(
@@ -473,7 +514,6 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
         color: color.withOpacity(0.05),
         borderRadius: BorderRadius.circular(12 * scale),
         border: Border.all(color: color.withOpacity(0.3)),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8 * scale, offset: Offset(0, 2 * scale))],
       ),
       child: Row(
         children: [
@@ -488,15 +528,12 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title,
-                    style: TextStyle(fontFamily: 'GolosB', fontSize: 12 * scale, color: Colors.grey[600])),
+                Text(title, style: TextStyle(fontFamily: 'GolosB', fontSize: 12 * scale, color: Colors.grey[600])),
                 SizedBox(height: 4 * scale),
-                Text(name,
-                    style: TextStyle(fontFamily: 'GolosB', fontSize: 16 * scale, color: color)),
+                Text(name, style: TextStyle(fontFamily: 'GolosB', fontSize: 16 * scale, color: color)),
                 if (date != null) ...[
                   SizedBox(height: 4 * scale),
-                  Text(_formatDate(date),
-                      style: TextStyle(fontFamily: 'GolosR', fontSize: 12 * scale, color: Colors.grey[500])),
+                  Text(_formatDate(date), style: TextStyle(fontFamily: 'GolosR', fontSize: 12 * scale, color: Colors.grey[500])),
                 ],
               ],
             ),
@@ -509,12 +546,11 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final scale = getScaleFactor(context);
-    final hasImage = widget.task['imageBase64'] != null && widget.task['imageBase64'].isNotEmpty;
-    final hasResultImage = widget.task['resultImageBase64'] != null && widget.task['resultImageBase64'].isNotEmpty;
+    final hasImage = widget.task['hasImage'] == true;
+    final hasResultImage = widget.task['hasResultImage'] == true;
     final status = widget.task['status'] ?? 'active';
     final bool isIPK = widget.task['isIPK'] == true;
 
-    // Проверяем, является ли текущий пользователь исполнителем задания
     final String? completedBy = widget.task['completedBy'];
     final String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
     final bool canRedo = status == 'rejected' && completedBy == currentUserId;
@@ -610,12 +646,14 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                     SizedBox(height: 30 * scale),
                     Text('Исходное изображение:', style: TextStyle(fontSize: 18 * scale, fontFamily: 'GolosB', color: Colors.black)),
                     SizedBox(height: 10 * scale),
-                    if (hasImage) ...[
-                      _buildInteractiveImage(context, widget.task['imageBase64']!, 'Исходное изображение задания', Colors.blue),
+                    if (hasImage && originalImageBase64 != null) ...[
+                      _buildInteractiveImage(context, originalImageBase64!, 'Исходное изображение', Colors.blue),
                       SizedBox(height: 10 * scale),
                       Text('Нажмите на изображение для приближения',
                           style: TextStyle(fontFamily: 'GolosR', color: Colors.blue, fontSize: 12 * scale),
                           textAlign: TextAlign.center),
+                    ] else if (hasImage) ...[
+                      Center(child: CircularProgressIndicator()),
                     ] else ...[
                       Container(
                         width: double.infinity,
@@ -635,20 +673,21 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                         ),
                       ),
                     ],
-                    if (hasResultImage) ...[
+                    if (hasResultImage && resultImageBase64 != null) ...[
                       SizedBox(height: 30 * scale),
                       Text('Фото результата:', style: TextStyle(fontSize: 18 * scale, fontFamily: 'GolosB', color: Colors.black)),
                       SizedBox(height: 10 * scale),
-                      _buildInteractiveImage(context, widget.task['resultImageBase64']!, 'Фото выполненной работы', Colors.green),
+                      _buildInteractiveImage(context, resultImageBase64!, 'Фото выполненной работы', Colors.green),
                       SizedBox(height: 10 * scale),
                       Text('Нажмите на изображение для приближения',
                           style: TextStyle(fontFamily: 'GolosR', color: Colors.green, fontSize: 12 * scale),
                           textAlign: TextAlign.center),
+                    ] else if (hasResultImage) ...[
+                      SizedBox(height: 30 * scale),
+                      Center(child: CircularProgressIndicator()),
                     ],
                     _buildReviewButtons(context),
                     _buildDeleteTaskSection(context),
-
-                    // КНОПКА "ПЕРЕДЕЛАТЬ ЗАДАНИЕ" - показывается только исполнителю при статусе 'rejected'
                     if (canRedo) ...[
                       SizedBox(height: 20 * scale),
                       Container(
@@ -679,7 +718,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                             ),
                             SizedBox(height: 8 * scale),
                             Text(
-                              '${isIPK ? 'ИПК' : 'ИТР'} отклонил предыдущее фото. Сделайте новое фото результата, оно заменит предыдущее.',
+                              '${isIPK ? 'ИПК' : 'ИТМ'} отклонил предыдущее фото. Сделайте новое фото результата.',
                               style: TextStyle(
                                 fontSize: 14 * scale,
                                 fontFamily: 'GolosR',
@@ -693,10 +732,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                                 Navigator.pushNamed(context, '/TaskPhotoScreen', arguments: {
                                   'orderNumber': widget.orderNumber,
                                   'collectionName': widget.collectionName,
-                                  'taskIndex': widget.taskIndex,
+                                  'taskId': widget.taskId,
                                   'task': widget.task,
                                   'taskNumber': widget.taskNumber,
-                                  'screenTitle': widget.task['isIPK'] == true ? 'ИПК ${widget.collectionName.replaceAll(RegExp(r'Sborka|Montasch|Pacet'), '')}' : 'Задания для ${widget.collectionName.replaceAll(RegExp(r'Sborka|Montasch|Pacet'), '')}',
+                                  'screenTitle': widget.task['isIPK'] == true ? 'ИПК' : 'Задание',
                                 });
                               },
                               style: ElevatedButton.styleFrom(
@@ -721,7 +760,6 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                         ),
                       ),
                     ],
-
                     SizedBox(height: 30 * scale),
                   ],
                 ),
@@ -815,13 +853,6 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                     boundaryMargin: EdgeInsets.all(20),
                     child: Center(child: Image.memory(bytes, fit: BoxFit.contain)),
                   ),
-                ),
-                Container(
-                  padding: EdgeInsets.all(12),
-                  color: Colors.black54,
-                  child: Text('Используйте жесты для масштабирования и перемещения',
-                      style: TextStyle(fontFamily: 'GolosR', color: Colors.white, fontSize: 12),
-                      textAlign: TextAlign.center),
                 ),
               ],
             ),

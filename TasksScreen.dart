@@ -3,8 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:psm/custom_snackbar.dart';
-import 'package:psm/pages/CreateTaskScreen.dart';
-import 'package:psm/pages/create_ipk_task_screen.dart';
+import 'package:psm/pages/task_image_loader.dart';
 
 class TasksScreen extends StatefulWidget {
   final String orderNumber;
@@ -122,8 +121,30 @@ class _TasksScreenState extends State<TasksScreen> {
     }
   }
 
-  Future<void> _confirmDeleteTask(int taskIndex, Map<String, dynamic> task, int taskNumber) async {
+  // 🔴 ОБНОВЛЁННОЕ удаление из подколлекции
+  Future<void> _confirmDeleteTask(String taskId, int taskNumber, Map<String, dynamic> task) async {
     final scale = getScaleFactor(context);
+
+    // Проверка прав
+    final bool isIPK = task['isIPK'] == true;
+    final String status = task['status'] ?? 'active';
+
+    if (isIPK && userSpec != 5) {
+      CustomSnackBar.showWarning(context: context, message: 'ИПК-задания может удалять только ИПК');
+      return;
+    }
+
+    if (!isIPK && userSpec != 4) {
+      CustomSnackBar.showWarning(context: context, message: 'У вас нет прав на удаление');
+      return;
+    }
+
+    // ИПК может удалять свои задания даже если выполнены
+    if ((status == 'completed' || status == 'approved') && !(isIPK && userSpec == 5)) {
+      CustomSnackBar.showWarning(context: context, message: 'Нельзя удалить завершённое задание');
+      return;
+    }
+
     final yes = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -153,126 +174,119 @@ class _TasksScreenState extends State<TasksScreen> {
         ],
       ),
     );
-    if (yes == true) {
-      // Проверка перед удалением
-      final bool isIPK = task['isIPK'] == true;
-      final String status = task['status'] ?? 'active';
 
-      // ✅ ИПК может удалять свои задания, даже если они выполнены
-      if (isIPK && userSpec != 5) {
-        CustomSnackBar.showWarning(context: context, message: 'ИПК-задания нельзя удалять');
-        return;
-      }
-
-      // ✅ ИПК может удалять выполненные задания, ИТР - нет
-      if ((status == 'completed' || status == 'approved') && !(isIPK && userSpec == 5)) {
-        CustomSnackBar.showWarning(context: context, message: 'Нельзя удалить завершенное задание');
-        return;
-      }
-
-      await _deleteTask(taskIndex, taskNumber);
-    }
+    if (yes == true) await _deleteTask(taskId, taskNumber, task);
   }
 
-  Future<void> _deleteTask(int taskIndex, int taskNumber) async {
+  Future<void> _deleteTask(String taskId, int taskNumber, Map<String, dynamic> task) async {
     try {
-      final orderDoc = await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).get();
-      if (!orderDoc.exists) throw Exception('Заказ не найден');
-      final orderData = orderDoc.data()!;
-      final tasks = List.from(orderData['tasks']);
-      if (taskIndex >= tasks.length) throw Exception('Задание не найдено');
+      final orderRef = FirebaseFirestore.instance
+          .collection(widget.collectionName)
+          .doc(widget.orderNumber);
 
-      final bool isIPK = tasks[taskIndex]['isIPK'] == true;
-      final String status = tasks[taskIndex]['status'] ?? 'active';
+      // Удаляем документ задачи из подколлекции
+      await orderRef.collection('tasks').doc(taskId).delete();
 
-      // ✅ ИПК может удалять свои задания, даже если они выполнены
-      if (isIPK && userSpec != 5) {
-        CustomSnackBar.showWarning(context: context, message: 'ИПК-задания нельзя удалять');
-        return;
+      // Удаляем изображения если есть
+      final imageRef = task['imageRef'];
+      final resultImageRef = task['resultImageRef'];
+
+      if (imageRef != null) {
+        await FirebaseFirestore.instance.collection('task_images').doc(imageRef).delete();
+        TaskImageLoader.removeFromCache(imageRef);
+      }
+      if (resultImageRef != null) {
+        await FirebaseFirestore.instance.collection('task_images').doc(resultImageRef).delete();
+        TaskImageLoader.removeFromCache(resultImageRef);
       }
 
-      // ✅ ИПК может удалять выполненные задания, ИТР - нет
-      if ((status == 'completed' || status == 'approved') && !(isIPK && userSpec == 5)) {
-        CustomSnackBar.showWarning(context: context, message: 'Нельзя удалить завершенное задание');
-        return;
+      // Перенумеровываем оставшиеся задачи
+      final remaining = await orderRef.collection('tasks').orderBy('taskNumber').get();
+
+      final batch = FirebaseFirestore.instance.batch();
+      for (int i = 0; i < remaining.docs.length; i++) {
+        final doc = remaining.docs[i];
+        final newNum = i + 1;
+        if (doc.data()['taskNumber'] != newNum) {
+          batch.update(doc.reference, {'taskNumber': newNum});
+        }
       }
+      await batch.commit();
 
-      tasks.removeAt(taskIndex);
-      for (int i = 0; i < tasks.length; i++) {
-        tasks[i]['taskNumber'] = i + 1;
-      }
+      // Проверяем оставшиеся ИПК-задачи
+      final hasIPK = remaining.docs.any((d) => d.data()['isIPK'] == true);
 
-      // Проверяем, остались ли ИПК-задания
-      final bool stillHasIPK = tasks.any((t) => t['isIPK'] == true);
-
-      await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).update({
-        'tasks': tasks,
-        'updatedAt': DateTime.now().toIso8601String(),
-        'hasIPKTask': stillHasIPK,
-      });
-
-      CustomSnackBar.showError(context: context, message: 'Задание №$taskNumber удалено');
-      if (tasks.isEmpty) {
-        await FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).delete();
+      // Обновляем метаданные заказа
+      if (remaining.docs.isEmpty) {
+        await orderRef.delete();
         CustomSnackBar.showInfo(context: context, message: 'Все задания удалены. Заказ закрыт.');
         Navigator.of(context).pop();
+      } else {
+        await orderRef.update({
+          'taskCount': remaining.docs.length,
+          'hasIPKTask': hasIPK,
+          'updatedAt': DateTime.now().toIso8601String(),
+        });
       }
+
+      CustomSnackBar.showSuccess(context: context, message: 'Задание №$taskNumber удалено');
     } catch (e) {
-      CustomSnackBar.showError(context: context, message: 'Ошибка удаления задания: $e');
+      CustomSnackBar.showError(context: context, message: 'Ошибка удаления: $e');
     }
   }
 
-  void _navigateToTaskPhoto(Map<String, dynamic> task, int taskNumber, int taskIndex) {
+  void _navigateToTaskPhoto(Map<String, dynamic> task, int taskNumber, String taskId) {
     Navigator.pushNamed(context, '/TaskPhotoScreen', arguments: {
       'orderNumber': widget.orderNumber,
       'collectionName': widget.collectionName,
-      'taskIndex': taskIndex,
+      'taskId': taskId,
       'task': task,
       'taskNumber': taskNumber,
-      'screenTitle': widget.screenTitle, // ✅ ДОБАВЛЕНО: передаем screenTitle
+      'screenTitle': widget.screenTitle,
     });
   }
 
-  void _navigateToTaskDetail(Map<String, dynamic> task, int taskNumber, int taskIndex) {
+  void _navigateToTaskDetail(Map<String, dynamic> task, int taskNumber, String taskId) {
     Navigator.pushNamed(context, '/TaskDetail', arguments: {
       'task': task,
       'taskNumber': taskNumber,
       'orderNumber': widget.orderNumber,
       'collectionName': widget.collectionName,
-      'taskIndex': taskIndex,
+      'taskId': taskId,
     });
   }
 
-  void _handleTaskTap(Map<String, dynamic> task, int taskNumber, int taskIndex) {
+  void _navigateToIPKWorkerTask(Map<String, dynamic> task, int taskNumber, String taskId) {
+    Navigator.pushNamed(context, '/IPKWorkerTask', arguments: {
+      'orderNumber': widget.orderNumber,
+      'collectionName': widget.collectionName,
+      'taskId': taskId,
+      'task': task,
+      'taskNumber': taskNumber,
+    });
+  }
+
+  void _handleTaskTap(Map<String, dynamic> task, int taskNumber, String taskId) {
     final status = task['status'] ?? 'active';
     final bool isIPK = task['isIPK'] == true;
 
-    // ИТР может выполнять ИПК-задания, но не проверять
+    // ИТМ может выполнять ИПК-задания, но не проверять
     if (isIPK && userSpec == 4 && status == 'active') {
-      Navigator.pushNamed(context, '/IPKWorkerTask', arguments: {
-        'orderNumber': widget.orderNumber,
-        'collectionName': widget.collectionName,
-        'taskIndex': taskIndex,
-        'task': task,
-        'taskNumber': taskNumber,
-      });
+      _navigateToIPKWorkerTask(task, taskNumber, taskId);
       return;
     }
 
-    // Остальные случаи без изменений
     if (userSpec == 4 || userSpec == 5) {
-      _navigateToTaskDetail(task, taskNumber, taskIndex);
+      _navigateToTaskDetail(task, taskNumber, taskId);
       return;
     }
+
     switch (status) {
       case 'active':
-        _navigateToTaskPhoto(task, taskNumber, taskIndex);
+        _navigateToTaskPhoto(task, taskNumber, taskId);
         break;
-      case 'completed':
-      case 'approved':
-      case 'rejected':
       default:
-        _navigateToTaskDetail(task, taskNumber, taskIndex);
+        _navigateToTaskDetail(task, taskNumber, taskId);
         break;
     }
   }
@@ -343,8 +357,14 @@ class _TasksScreenState extends State<TasksScreen> {
               centerTitle: true,
             ),
             Expanded(
-              child: StreamBuilder<DocumentSnapshot>(
-                stream: FirebaseFirestore.instance.collection(widget.collectionName).doc(widget.orderNumber).snapshots(),
+              // 🔴 ИЗМЕНЕНО: Читаем из подколлекции tasks
+              child: StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection(widget.collectionName)
+                    .doc(widget.orderNumber)
+                    .collection('tasks')
+                    .orderBy('taskNumber')
+                    .snapshots(),
                 builder: (context, snapshot) {
                   if (snapshot.hasError) {
                     return Center(child: Text('Ошибка загрузки данных', style: TextStyle(fontFamily: 'GolosR')));
@@ -352,16 +372,8 @@ class _TasksScreenState extends State<TasksScreen> {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return Center(child: CircularProgressIndicator(color: Colors.red));
                   }
-                  if (!snapshot.hasData || !snapshot.data!.exists) {
-                    return Center(child: Text('Заказ не найден', style: TextStyle(fontFamily: 'GolosR')));
-                  }
 
-                  final orderData = snapshot.data!.data() as Map<String, dynamic>;
-                  List<dynamic> allTasks = [];
-                  try {
-                    final tasksData = orderData['tasks'];
-                    if (tasksData is List) allTasks = tasksData;
-                  } catch (_) {}
+                  final tasks = snapshot.data?.docs ?? [];
 
                   if (isLoadingUserSpec) {
                     return Center(child: CircularProgressIndicator(color: Colors.red));
@@ -370,11 +382,12 @@ class _TasksScreenState extends State<TasksScreen> {
                   final bool isIPKScreen = widget.screenTitle.contains('ИПК');
                   final bool isUserIPK = userSpec == 5;
 
-                  final tasks = (isIPKScreen && isUserIPK)
-                      ? allTasks.where((t) => t['isIPK'] == true).toList()
-                      : allTasks;
+                  // Фильтруем задачи для ИПК-экрана
+                  final filteredTasks = (isIPKScreen && isUserIPK)
+                      ? tasks.where((t) => t['isIPK'] == true).toList()
+                      : tasks;
 
-                  if (tasks.isEmpty) {
+                  if (filteredTasks.isEmpty) {
                     return Center(
                       child: Text(
                           isUserIPK ? 'ИПК-заданий в этом заказе пока нет' : 'Заданий в этом заказе пока нет',
@@ -382,8 +395,8 @@ class _TasksScreenState extends State<TasksScreen> {
                     );
                   }
 
-                  final allApproved = tasks.every((t) => t['status'] == 'approved');
-                  final approvedCount = tasks.where((t) => t['status'] == 'approved').length;
+                  final allApproved = filteredTasks.every((t) => t['status'] == 'approved');
+                  final approvedCount = filteredTasks.where((t) => t['status'] == 'approved').length;
 
                   return Column(
                     children: [
@@ -406,7 +419,7 @@ class _TasksScreenState extends State<TasksScreen> {
                                 child: Text(
                                   allApproved
                                       ? 'Все задания подтверждены'
-                                      : 'Статус: $approvedCount/${tasks.length} подтверждено',
+                                      : 'Статус: $approvedCount/${filteredTasks.length} подтверждено',
                                   style: TextStyle(
                                       fontFamily: 'GolosR',
                                       color: allApproved ? Colors.green : Colors.blue,
@@ -421,220 +434,209 @@ class _TasksScreenState extends State<TasksScreen> {
                       Expanded(
                         child: ListView.builder(
                           padding: EdgeInsets.all(20 * scale),
-                          itemCount: tasks.length,
+                          itemCount: filteredTasks.length,
                           itemBuilder: (context, index) {
-                            try {
-                              final task = tasks[index] is Map<String, dynamic>
-                                  ? tasks[index] as Map<String, dynamic>
-                                  : Map<String, dynamic>.from(tasks[index] ?? {});
+                            final taskDoc = filteredTasks[index];
+                            final task = taskDoc.data() as Map<String, dynamic>;
+                            final taskId = taskDoc.id;
 
-                              final bool isUserIPK = userSpec == 5;
-                              final bool isIPKScreen = widget.screenTitle.contains('ИПК');
-                              final displayTaskNumber = (isUserIPK && isIPKScreen) ? index + 1 : (task['taskNumber'] ?? index + 1);
+                            final displayTaskNumber = isUserIPK && isIPKScreen
+                                ? index + 1
+                                : (task['taskNumber'] ?? index + 1);
 
-                              final hasImage = task['imageBase64'] != null && task['imageBase64'].isNotEmpty;
-                              final hasResultImage = task['resultImageBase64'] != null && task['resultImageBase64'].isNotEmpty;
-                              final status = task['status'] ?? 'active';
-                              final taskDescription = task['taskDescription']?.toString() ?? '';
-                              final bool isIPK = task['isIPK'] == true;
+                            final hasImage = task['hasImage'] == true;
+                            final hasResultImage = task['hasResultImage'] == true;
+                            final status = task['status'] ?? 'active';
+                            final taskDescription = task['taskDescription']?.toString() ?? '';
+                            final bool isIPK = task['isIPK'] == true;
 
-                              // ✅ ИПК может удалять свои выполненные задания
-                              final bool canDelete = (userSpec == 4 && !isIPK) || (userSpec == 5 && isIPK);
+                            // Права на удаление
+                            final bool canDelete = (userSpec == 4 && !isIPK) || (userSpec == 5 && isIPK);
 
-                              return GestureDetector(
-                                onTap: () => _handleTaskTap(task, displayTaskNumber, index),
-                                child: Card(
-                                  margin: EdgeInsets.only(bottom: 15 * scale),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(15 * scale),
-                                  ),
-                                  elevation: 2,
-                                  child: Container(
-                                    padding: EdgeInsets.all(15 * scale),
-                                    child: Row(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Container(
-                                          width: 40 * scale,
-                                          height: 40 * scale,
-                                          decoration: BoxDecoration(
-                                            color: isIPK ? Colors.red[800] : Colors.red,
-                                            borderRadius: BorderRadius.circular(10 * scale),
-                                          ),
-                                          child: Center(
-                                            child: Text('$displayTaskNumber',
-                                                style: TextStyle(
-                                                    color: Colors.white,
-                                                    fontFamily: 'GolosB',
-                                                    fontSize: 16 * scale)),
-                                          ),
+                            return GestureDetector(
+                              onTap: () => _handleTaskTap(task, displayTaskNumber, taskId),
+                              child: Card(
+                                margin: EdgeInsets.only(bottom: 15 * scale),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(15 * scale),
+                                ),
+                                elevation: 2,
+                                child: Container(
+                                  padding: EdgeInsets.all(15 * scale),
+                                  child: Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Container(
+                                        width: 40 * scale,
+                                        height: 40 * scale,
+                                        decoration: BoxDecoration(
+                                          color: isIPK ? Colors.red[800] : Colors.red,
+                                          borderRadius: BorderRadius.circular(10 * scale),
                                         ),
-                                        SizedBox(width: 15 * scale),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Row(
-                                                children: [
-                                                  Text('Задание ',
-                                                      style: TextStyle(
-                                                          fontFamily: 'GolosB',
-                                                          fontSize: 18 * scale,
-                                                          color: Colors.black87)),
-                                                  Text('№$displayTaskNumber',
-                                                      style: TextStyle(
-                                                          fontFamily: 'GolosB',
-                                                          fontSize: 18 * scale,
-                                                          color: Colors.black87)),
-                                                ],
-                                              ),
-                                              SizedBox(height: 8 * scale),
-                                              if (taskDescription.isNotEmpty) ...[
-                                                Text(taskDescription,
-                                                    maxLines: 2,
-                                                    overflow: TextOverflow.ellipsis,
+                                        child: Center(
+                                          child: Text('$displayTaskNumber',
+                                              style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontFamily: 'GolosB',
+                                                  fontSize: 16 * scale)),
+                                        ),
+                                      ),
+                                      SizedBox(width: 15 * scale),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Text('Задание ',
                                                     style: TextStyle(
-                                                        fontFamily: 'GolosR',
-                                                        color: Colors.black87,
-                                                        fontSize: 14 * scale)),
-                                                SizedBox(height: 8 * scale),
+                                                        fontFamily: 'GolosB',
+                                                        fontSize: 18 * scale,
+                                                        color: Colors.black87)),
+                                                Text('№$displayTaskNumber',
+                                                    style: TextStyle(
+                                                        fontFamily: 'GolosB',
+                                                        fontSize: 18 * scale,
+                                                        color: Colors.black87)),
                                               ],
-                                              if (task['createdBy'] != null)
-                                                FutureBuilder<String>(
-                                                  future: _getUserName(task['createdBy']),
-                                                  builder: (context, snap) {
-                                                    if (snap.connectionState == ConnectionState.waiting) {
-                                                      return Text('Заказчик: Загрузка...',
-                                                          style: TextStyle(
-                                                              fontFamily: 'GolosR',
-                                                              fontSize: 12 * scale,
-                                                              color: Colors.grey[600]));
-                                                    }
-                                                    return Text('Заказчик: ${snap.data ?? 'Неизвестно'}',
+                                            ),
+                                            SizedBox(height: 8 * scale),
+                                            if (taskDescription.isNotEmpty) ...[
+                                              Text(taskDescription,
+                                                  maxLines: 2,
+                                                  overflow: TextOverflow.ellipsis,
+                                                  style: TextStyle(
+                                                      fontFamily: 'GolosR',
+                                                      color: Colors.black87,
+                                                      fontSize: 14 * scale)),
+                                              SizedBox(height: 8 * scale),
+                                            ],
+                                            if (task['createdBy'] != null)
+                                              FutureBuilder<String>(
+                                                future: _getUserName(task['createdBy']),
+                                                builder: (context, snap) {
+                                                  if (snap.connectionState == ConnectionState.waiting) {
+                                                    return Text('Заказчик: Загрузка...',
                                                         style: TextStyle(
                                                             fontFamily: 'GolosR',
                                                             fontSize: 12 * scale,
                                                             color: Colors.grey[600]));
-                                                  },
-                                                ),
-                                              SizedBox(height: 8 * scale),
-                                              Row(
-                                                children: [
-                                                  Icon(
-                                                    hasImage ? Icons.photo_library : Icons.photo_library_outlined,
-                                                    color: hasImage ? Colors.green : Colors.grey,
-                                                    size: 18 * scale,
-                                                  ),
-                                                  SizedBox(width: 5 * scale),
-                                                  Text(hasImage ? 'Есть фото' : 'Нет фото',
+                                                  }
+                                                  return Text('Заказчик: ${snap.data ?? 'Неизвестно'}',
                                                       style: TextStyle(
                                                           fontFamily: 'GolosR',
                                                           fontSize: 12 * scale,
-                                                          color: hasImage ? Colors.green : Colors.grey)),
-                                                ],
+                                                          color: Colors.grey[600]));
+                                                },
                                               ),
-                                              if (hasResultImage) ...[
-                                                SizedBox(height: 5 * scale),
-                                                Row(
-                                                  children: [
-                                                    Icon(Icons.photo_camera_back, color: Colors.green, size: 18 * scale),
-                                                    SizedBox(width: 5 * scale),
-                                                    Text('Есть результат',
-                                                        style: TextStyle(
-                                                            fontFamily: 'GolosR',
-                                                            fontSize: 12 * scale,
-                                                            color: Colors.green)),
-                                                  ],
+                                            SizedBox(height: 8 * scale),
+                                            Row(
+                                              children: [
+                                                Icon(
+                                                  hasImage ? Icons.photo_library : Icons.photo_library_outlined,
+                                                  color: hasImage ? Colors.green : Colors.grey,
+                                                  size: 18 * scale,
                                                 ),
+                                                SizedBox(width: 5 * scale),
+                                                Text(hasImage ? 'Есть фото' : 'Нет фото',
+                                                    style: TextStyle(
+                                                        fontFamily: 'GolosR',
+                                                        fontSize: 12 * scale,
+                                                        color: hasImage ? Colors.green : Colors.grey)),
                                               ],
-                                              SizedBox(height: 8 * scale),
+                                            ),
+                                            if (hasResultImage) ...[
+                                              SizedBox(height: 5 * scale),
                                               Row(
                                                 children: [
-                                                  Container(
-                                                    padding: EdgeInsets.symmetric(
-                                                        horizontal: 12 * scale, vertical: 6 * scale),
-                                                    decoration: BoxDecoration(
-                                                      color: _statusColor(status).withOpacity(0.1),
-                                                      borderRadius: BorderRadius.circular(8 * scale),
-                                                    ),
-                                                    child: Row(
-                                                      mainAxisSize: MainAxisSize.min,
-                                                      children: [
-                                                        Icon(_statusIcon(status),
-                                                            color: _statusColor(status), size: 14 * scale),
-                                                        SizedBox(width: 6 * scale),
-                                                        Flexible(
-                                                          child: Text(_statusText(status),
-                                                              style: TextStyle(
-                                                                  fontFamily: 'GolosB',
-                                                                  fontSize: 12 * scale,
-                                                                  color: _statusColor(status)),
-                                                              maxLines: 1,
-                                                              overflow: TextOverflow.ellipsis),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                  ),
-                                                  if (isIPK) ...[
-                                                    SizedBox(width: 8 * scale),
-                                                    Container(
-                                                      padding: EdgeInsets.symmetric(
-                                                        horizontal: 6 * scale,
-                                                        vertical: 2 * scale,
-                                                      ),
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.red.withOpacity(0.1),
-                                                        borderRadius: BorderRadius.circular(6 * scale),
-                                                        border: Border.all(color: Colors.red, width: 1),
-                                                      ),
-                                                      child: Text(
-                                                        'ИПК',
-                                                        style: TextStyle(
-                                                          fontFamily: 'GolosB',
-                                                          fontSize: 9 * scale,
-                                                          color: Colors.red,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ],
+                                                  Icon(Icons.photo_camera_back, color: Colors.green, size: 18 * scale),
+                                                  SizedBox(width: 5 * scale),
+                                                  Text('Есть результат',
+                                                      style: TextStyle(
+                                                          fontFamily: 'GolosR',
+                                                          fontSize: 12 * scale,
+                                                          color: Colors.green)),
                                                 ],
                                               ),
                                             ],
-                                          ),
+                                            SizedBox(height: 8 * scale),
+                                            Row(
+                                              children: [
+                                                Container(
+                                                  padding: EdgeInsets.symmetric(
+                                                      horizontal: 12 * scale, vertical: 6 * scale),
+                                                  decoration: BoxDecoration(
+                                                    color: _statusColor(status).withOpacity(0.1),
+                                                    borderRadius: BorderRadius.circular(8 * scale),
+                                                  ),
+                                                  child: Row(
+                                                    mainAxisSize: MainAxisSize.min,
+                                                    children: [
+                                                      Icon(_statusIcon(status),
+                                                          color: _statusColor(status), size: 14 * scale),
+                                                      SizedBox(width: 6 * scale),
+                                                      Flexible(
+                                                        child: Text(_statusText(status),
+                                                            style: TextStyle(
+                                                                fontFamily: 'GolosB',
+                                                                fontSize: 12 * scale,
+                                                                color: _statusColor(status)),
+                                                            maxLines: 1,
+                                                            overflow: TextOverflow.ellipsis),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                                if (isIPK) ...[
+                                                  SizedBox(width: 8 * scale),
+                                                  Container(
+                                                    padding: EdgeInsets.symmetric(
+                                                      horizontal: 6 * scale,
+                                                      vertical: 2 * scale,
+                                                    ),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.red.withOpacity(0.1),
+                                                      borderRadius: BorderRadius.circular(6 * scale),
+                                                      border: Border.all(color: Colors.red, width: 1),
+                                                    ),
+                                                    child: Text(
+                                                      'ИПК',
+                                                      style: TextStyle(
+                                                        fontFamily: 'GolosB',
+                                                        fontSize: 9 * scale,
+                                                        color: Colors.red,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                          ],
                                         ),
-                                        if (canDelete) ...[
-                                          SizedBox(width: 10 * scale),
-                                          GestureDetector(
-                                            onTap: () => _confirmDeleteTask(index, task, displayTaskNumber),
-                                            child: Container(
-                                              width: 40 * scale,
-                                              height: 40 * scale,
-                                              decoration: BoxDecoration(
-                                                color: Colors.red.withOpacity(0.1),
-                                                borderRadius: BorderRadius.circular(10 * scale),
-                                                border: Border.all(color: Colors.red, width: 1),
-                                              ),
-                                              child: Center(
-                                                child: Icon(Icons.delete_outline, color: Colors.red, size: 22 * scale),
-                                              ),
+                                      ),
+                                      if (canDelete) ...[
+                                        SizedBox(width: 10 * scale),
+                                        GestureDetector(
+                                          onTap: () => _confirmDeleteTask(taskId, displayTaskNumber, task),
+                                          child: Container(
+                                            width: 40 * scale,
+                                            height: 40 * scale,
+                                            decoration: BoxDecoration(
+                                              color: Colors.red.withOpacity(0.1),
+                                              borderRadius: BorderRadius.circular(10 * scale),
+                                              border: Border.all(color: Colors.red, width: 1),
+                                            ),
+                                            child: Center(
+                                              child: Icon(Icons.delete_outline, color: Colors.red, size: 22 * scale),
                                             ),
                                           ),
-                                        ],
+                                        ),
                                       ],
-                                    ),
+                                    ],
                                   ),
                                 ),
-                              );
-                            } catch (_) {
-                              return Card(
-                                margin: EdgeInsets.only(bottom: 15 * scale),
-                                child: ListTile(
-                                  leading: Icon(Icons.error, color: Colors.red, size: 24 * scale),
-                                  title: Text('Ошибка загрузки задания', style: TextStyle(fontFamily: 'GolosR', fontSize: 16 * scale)),
-                                  subtitle: Text('Невозможно отобразить задание', style: TextStyle(fontFamily: 'GolosR', fontSize: 14 * scale)),
-                                ),
-                              );
-                            }
+                              ),
+                            );
                           },
                         ),
                       ),

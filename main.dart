@@ -111,8 +111,8 @@ class MyApp extends StatelessWidget {
           '/Reg': (_) => const Reg(),
           '/VerifyEmail': (_) => const VerifyEmailScreen(),
           '/specialization': (_) => const SpecializationScreen(),
-          '/MasterScreen': (_) => MasterS(),                    // ❌ Без const (StatelessWidget с методами)
-          '/IPKScreen': (_) =>  IPKScreen(),              // ✅ Можно const, если IPKScreen const-конструктор
+          '/MasterScreen': (_) => MasterS(),
+          '/IPKScreen': (_) =>  IPKScreen(),
           '/CreateTask': (_) => const CreateTaskScreen(),
           '/CreateIPKTask': (_) => const CreateIPKTaskScreen(),
           '/Sborka': (_) => const SborkaScreen(),
@@ -130,7 +130,7 @@ class MyApp extends StatelessWidget {
             return IPKWorkerTaskScreen(
               orderNumber: args['orderNumber'],
               collectionName: args['collectionName'],
-              taskIndex: args['taskIndex'],
+              taskId: args['taskId'], // 🔴 Изменено с taskIndex
               task: args['task'],
               taskNumber: args['taskNumber'],
             );
@@ -152,9 +152,14 @@ class MyApp extends StatelessWidget {
               taskNumber: args['taskNumber'],
               orderNumber: args['orderNumber'],
               collectionName: args['collectionName'],
-              taskIndex: args['taskIndex'],
+              taskId: args['taskId'], // 🔴 Изменено с taskIndex
             );
           },
+          '/TaskPhotoScreen': (context) {
+            final args = ModalRoute.of(context)!.settings.arguments as Map<String, dynamic>;
+            return TaskPhotoScreen(); // Аргументы передаются через ModalRoute
+          },
+
         },
       ),
     );

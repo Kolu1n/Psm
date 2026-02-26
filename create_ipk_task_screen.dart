@@ -5,6 +5,39 @@ import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:psm/custom_snackbar.dart';
+import 'package:image/image.dart' as img;
+import 'dart:typed_data'; // Добавьте в начало файла
+
+Future<List<int>> _compressImage(List<int> bytes, {required int maxSizeKB}) async {
+  if (bytes.length <= maxSizeKB * 1024) {
+    return bytes;
+  }
+
+  // 🔴 ИСПРАВЛЕНИЕ: Преобразуем в Uint8List
+  final Uint8List uint8Bytes = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+  img.Image? image = img.decodeImage(uint8Bytes);
+
+  if (image == null) return bytes;
+
+  const int maxDimension = 1200;
+  if (image.width > maxDimension || image.height > maxDimension) {
+    if (image.width > image.height) {
+      image = img.copyResize(image, width: maxDimension);
+    } else {
+      image = img.copyResize(image, height: maxDimension);
+    }
+  }
+
+  int quality = 85;
+  List<int> compressed = img.encodeJpg(image, quality: quality);
+
+  while (compressed.length > maxSizeKB * 1024 && quality > 30) {
+    quality -= 10;
+    compressed = img.encodeJpg(image, quality: quality);
+  }
+
+  return compressed;
+}
 
 class CreateIPKTaskScreen extends StatefulWidget {
   const CreateIPKTaskScreen({Key? key}) : super(key: key);
@@ -25,7 +58,6 @@ class _CreateIPKTaskScreenState extends State<CreateIPKTaskScreen> {
 
   final List<String> _taskTypes = ['Сборка', 'Монтаж', 'Пакетирование'];
 
-  // Публикуем в основные коллекции
   final Map<String, String> _collectionMap = {
     'Сборка': 'Sborka',
     'Монтаж': 'Montasch',
@@ -53,7 +85,6 @@ class _CreateIPKTaskScreenState extends State<CreateIPKTaskScreen> {
     _acceptArguments();
   }
 
-  // Обработка аргументов: автозаполнение номера заказа и типа
   void _acceptArguments() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
@@ -162,6 +193,32 @@ class _CreateIPKTaskScreenState extends State<CreateIPKTaskScreen> {
     }
   }
 
+  Future<List<int>> _compressImage(List<int> bytes, {required int maxSizeKB}) async {
+    if (bytes.length <= maxSizeKB * 1024) return bytes;
+
+    img.Image? image = img.decodeImage(Uint8List.fromList(bytes));
+    if (image == null) return bytes;
+
+    const int maxDimension = 1200;
+    if (image.width > maxDimension || image.height > maxDimension) {
+      if (image.width > image.height) {
+        image = img.copyResize(image, width: maxDimension);
+      } else {
+        image = img.copyResize(image, height: maxDimension);
+      }
+    }
+
+    int quality = 85;
+    List<int> compressed = img.encodeJpg(image, quality: quality);
+
+    while (compressed.length > maxSizeKB * 1024 && quality > 30) {
+      quality -= 10;
+      compressed = img.encodeJpg(image, quality: quality);
+    }
+
+    return compressed;
+  }
+
   Future<void> _processImage(File file) async {
     try {
       final bytes = await file.readAsBytes();
@@ -169,7 +226,15 @@ class _CreateIPKTaskScreenState extends State<CreateIPKTaskScreen> {
         CustomSnackBar.showWarning(context: context, message: 'Фото слишком большое. Выберите файл меньше 5MB');
         return;
       }
-      final base64 = base64Encode(bytes);
+
+      final compressedBytes = await _compressImage(bytes, maxSizeKB: 500);
+      final base64 = base64Encode(compressedBytes);
+
+      if (base64.length > 700000) {
+        CustomSnackBar.showWarning(context: context, message: 'Фото слишком детализированное. Попробуйте другое.');
+        return;
+      }
+
       setState(() {
         _selectedFile = file;
         _base64Image = base64;
@@ -188,6 +253,7 @@ class _CreateIPKTaskScreenState extends State<CreateIPKTaskScreen> {
     CustomSnackBar.showInfo(context: context, message: 'Фото удалено');
   }
 
+  // 🔴 ОБНОВЛЁННЫЙ МЕТОД: Создание ИПК-задачи в подколлекции
   Future<void> _publishTask() async {
     if (!_formKey.currentState!.validate()) return;
     if (_selectedTaskType == null) {
@@ -202,57 +268,69 @@ class _CreateIPKTaskScreenState extends State<CreateIPKTaskScreen> {
       final orderNumber = _orderController.text.trim();
       final taskDescription = _taskController.text.trim();
       final collectionName = _collectionMap[_selectedTaskType]!;
-
-      final orderDoc = FirebaseFirestore.instance.collection(collectionName).doc(orderNumber);
-      final orderSnapshot = await orderDoc.get();
       final now = DateTime.now().toIso8601String();
 
-      if (_base64Image != null && _base64Image!.length > 10000000) {
-        CustomSnackBar.showWarning(context: context, message: 'Изображение слишком большое. Выберите файл меньше 1MB');
-        return;
+      final orderDocRef = FirebaseFirestore.instance.collection(collectionName).doc(orderNumber);
+      final orderSnapshot = await orderDocRef.get();
+
+      int taskNumber = 1;
+      if (orderSnapshot.exists) {
+        final tasksSnapshot = await orderDocRef.collection('tasks').get();
+        taskNumber = tasksSnapshot.docs.length + 1;
+      } else {
+        await orderDocRef.set({
+          'orderNumber': orderNumber,
+          'createdAt': now,
+          'updatedAt': now,
+          'hasIPKTask': false,
+        });
       }
 
-      final newTask = {
+      // Сохраняем изображение
+      String? imageRef;
+      if (_base64Image != null) {
+        final imageDoc = await FirebaseFirestore.instance.collection('task_images').add({
+          'imageBase64': _base64Image,
+          'orderNumber': orderNumber,
+          'collectionName': collectionName,
+          'taskNumber': taskNumber,
+          'createdBy': user.uid,
+          'createdAt': now,
+          'taskType': 'original',
+          'isIPK': true,
+        });
+        imageRef = imageDoc.id;
+      }
+
+      // 🔴 СОЗДАЁМ ИПК-задачу в подколлекции
+      final taskData = {
+        'taskNumber': taskNumber,
         'taskDescription': taskDescription,
         'createdBy': user.uid,
         'createdAt': now,
-        'taskNumber': 1,
         'status': 'active',
         'completedBy': null,
         'completedAt': null,
         'reviewedBy': null,
         'reviewedAt': null,
-        'isIPK': true, // маркер ИПК
+        'isIPK': true,
+        'hasImage': imageRef != null,
+        'imageRef': imageRef,
+        'resultImageRef': null,
+        'hasResultImage': false,
       };
 
-      if (_base64Image != null) {
-        newTask['imageBase64'] = _base64Image;
-        newTask['hasImage'] = true;
-      }
+      await orderDocRef.collection('tasks').doc('task_$taskNumber').set(taskData);
 
-      if (orderSnapshot.exists) {
-        final tasks = orderSnapshot.data()!['tasks'] as List;
-        newTask['taskNumber'] = tasks.length + 1;
+      // Обновляем метаданные заказа
+      await orderDocRef.update({
+        'updatedAt': now,
+        'hasIPKTask': true,
+        'taskCount': taskNumber,
+      });
 
-        await orderDoc.update({
-          'tasks': FieldValue.arrayUnion([newTask]),
-          'updatedAt': now,
-          'hasIPKTask': true, // ⚠️ ОТМЕЧАЕМ ЗАКАЗ КАК СОДЕРЖАЩИЙ ИПК
-        });
-      } else {
-        await orderDoc.set({
-          'orderNumber': orderNumber,
-          'createdAt': now,
-          'tasks': [newTask],
-          'hasIPKTask': true, // ⚠️ ОТМЕЧАЕМ ЗАКАЗ КАК СОДЕРЖАЩИЙ ИПК
-        });
-      }
-
-      CustomSnackBar.showSuccess(context: context, message: 'Задание успешно опубликовано');
-
-      // 🔴 ЗАКРЫВАЕМ ЭКРАН ПОСЛЕ УСПЕШНОЙ ПУБЛИКАЦИИ
+      CustomSnackBar.showSuccess(context: context, message: 'ИПК-задание №$taskNumber успешно опубликовано');
       Navigator.of(context).pop();
-
     } catch (e) {
       CustomSnackBar.showError(context: context, message: 'Ошибка публикации: $e');
     }
