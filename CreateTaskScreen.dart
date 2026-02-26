@@ -24,7 +24,6 @@ class _CreateTaskScreenState extends State<CreateTaskScreen> {
   final ImagePicker _picker = ImagePicker();
 
   final List<String> _taskTypes = ['Сборка', 'Монтаж', 'Пакетирование'];
-  int penis = 2;
 
   final Map<String, String> _collectionMap = {
     'Сборка': 'Sborka',
